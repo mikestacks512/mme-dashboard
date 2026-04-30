@@ -1,0 +1,45 @@
+# Environment & secrets
+.env
+*.env
+
+# Financial data files (sensitive)
+Muscleman Elite*
+*.csv
+*.zip
+jobs.csv
+leads.csv
+opportunities.csv
+
+# Zone identifiers (Windows)
+*:Zone.Identifier
+
+# Old text reports
+reports/
+
+# Database
+db/*.duckdb
+db/*.duckdb.wal
+
+# QuickBooks exports (contain financial data)
+exports/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Selenium / ChromeDriver
+bin/
