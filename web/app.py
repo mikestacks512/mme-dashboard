@@ -103,6 +103,36 @@ async def upload_pl(file: UploadFile = File(...)):
     return {"status": "ok", "message": f"Uploaded {file.filename} ({len(content):,} bytes)", "path": dest}
 
 
+@app.get("/api/data-status")
+def api_data_status():
+    """Check data freshness — when was QB CSV last uploaded, when was last sync."""
+    import duckdb
+    result = {"qb_uploaded": None, "last_sync": None, "opp_count": 0}
+
+    # Check QB CSV
+    pl_path = os.path.join(EXPORT_DIR, "mme_profit_and_loss_detail.csv")
+    if os.path.exists(pl_path):
+        mtime = os.path.getmtime(pl_path)
+        result["qb_uploaded"] = datetime.fromtimestamp(mtime).isoformat()
+
+    # Check DuckDB
+    if os.path.exists(DB_PATH):
+        try:
+            con = duckdb.connect(DB_PATH, read_only=True)
+            row = con.execute("SELECT COUNT(*) FROM opportunities").fetchone()
+            result["opp_count"] = row[0] if row else 0
+            sync_row = con.execute(
+                "SELECT completed_at FROM sync_log WHERE status='success' ORDER BY completed_at DESC LIMIT 1"
+            ).fetchone()
+            if sync_row and sync_row[0]:
+                result["last_sync"] = sync_row[0].isoformat() if hasattr(sync_row[0], 'isoformat') else str(sync_row[0])
+            con.close()
+        except Exception:
+            pass
+
+    return result
+
+
 @app.get("/api/overview")
 def api_overview():
     """Pulls key metrics from financial, sales, marketing, and leads for the big picture."""

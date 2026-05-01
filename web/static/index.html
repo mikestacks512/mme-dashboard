@@ -41,6 +41,34 @@ body {
 }
 .header .refresh-btn:hover { background: rgba(255,255,255,0.3); }
 
+/* Passcode screen */
+.passcode-screen {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--bg); z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+}
+.passcode-box {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; padding: 40px; text-align: center;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.08); max-width: 360px; width: 100%;
+}
+.passcode-box h2 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+.passcode-box .pb-sub { font-size: 13px; color: var(--text-dim); margin-bottom: 24px; }
+.passcode-box input {
+  width: 160px; padding: 12px; font-size: 24px; text-align: center;
+  border: 2px solid var(--border); border-radius: 10px;
+  letter-spacing: 8px; font-weight: 700; outline: none;
+  -webkit-text-security: disc;
+}
+.passcode-box input:focus { border-color: var(--accent); }
+.passcode-box .pb-error {
+  color: var(--red); font-size: 13px; margin-top: 12px; min-height: 20px;
+}
+.passcode-box .pb-logo {
+  font-size: 14px; font-weight: 700; color: var(--accent);
+  margin-bottom: 16px; letter-spacing: 0.5px;
+}
+
 /* Tabs */
 .tabs {
   display: flex; background: var(--surface);
@@ -224,6 +252,17 @@ tr:hover td { background: #fafafa; }
 </head>
 <body>
 
+<div class="passcode-screen" id="passcode-screen">
+  <div class="passcode-box">
+    <div class="pb-logo">MME FINANCIAL DASHBOARD</div>
+    <h2>Enter Passcode</h2>
+    <div class="pb-sub">Muscleman Elite Moving & Storage</div>
+    <input type="password" id="passcode-input" maxlength="4" inputmode="numeric" pattern="[0-9]*" autofocus>
+    <div class="pb-error" id="passcode-error"></div>
+  </div>
+</div>
+
+<div id="dashboard-wrap" style="display:none">
 <div class="header">
   <h1>MME Financial Dashboard</h1>
   <span class="subtitle">Muscleman Elite Moving & Storage</span>
@@ -238,7 +277,7 @@ tr:hover td { background: #fafafa; }
   <div class="tab" data-tab="marketing">Marketing ROI</div>
   <div class="tab" data-tab="estimates">Pricing & Estimates</div>
   <div class="tab" data-tab="trends">Trends</div>
-  <div class="tab" data-tab="data" style="margin-left:auto; color:var(--text-dim);">Data Management</div>
+  <div class="tab" data-tab="data">Data Management</div>
 </div>
 
 <div class="content">
@@ -251,6 +290,49 @@ tr:hover td { background: #fafafa; }
   <div class="panel" id="panel-trends"><div class="loading">Loading trends...</div></div>
   <div class="panel" id="panel-data"></div>
 </div>
+
+</div><!-- end dashboard-wrap -->
+
+<script>
+/* ── Passcode gate ── */
+(function() {
+  const PASSCODE = '5311';
+  const input = document.getElementById('passcode-input');
+  const error = document.getElementById('passcode-error');
+  const screen = document.getElementById('passcode-screen');
+  const dash = document.getElementById('dashboard-wrap');
+
+  // Check if already authenticated this session
+  if (sessionStorage.getItem('mme_auth') === 'yes') {
+    screen.style.display = 'none';
+    dash.style.display = 'block';
+  }
+
+  input.addEventListener('input', function() {
+    error.textContent = '';
+    if (this.value.length === 4) {
+      if (this.value === PASSCODE) {
+        sessionStorage.setItem('mme_auth', 'yes');
+        screen.style.display = 'none';
+        dash.style.display = 'block';
+        // Trigger initial load after unlock
+        if (typeof loadTab === 'function') loadTab('overview');
+      } else {
+        error.textContent = 'Incorrect passcode';
+        this.value = '';
+      }
+    }
+  });
+
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      if (this.value.length < 4) {
+        error.textContent = 'Enter 4-digit passcode';
+      }
+    }
+  });
+})();
+</script>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -848,6 +930,10 @@ const renderers = {
     let html = `<div class="question">Data Management</div>
       <div class="question-sub">Sync SmartMoving data and upload QuickBooks reports to populate the dashboard.</div>`;
 
+    // Data freshness cards
+    html += `<div id="data-freshness" class="scorecards" style="margin-bottom:24px"><div class="loading" style="padding:20px">Checking data status...</div></div>`;
+
+
     // SmartMoving Sync
     html += `<div class="scorecard" style="margin-bottom:20px">
       <div class="sc-label">SMARTMOVING DATA SYNC</div>
@@ -879,6 +965,36 @@ const renderers = {
     </div>`;
 
     panel.innerHTML = html;
+
+    // Load freshness info
+    fetch('/api/data-status').then(r => r.json()).then(ds => {
+      const box = document.getElementById('data-freshness');
+      let cards = '';
+      if (ds.qb_uploaded) {
+        const age = syncAge(ds.qb_uploaded);
+        const isStale = (new Date() - new Date(ds.qb_uploaded)) > 30 * 86400000;
+        cards += sc('QuickBooks P&L', age ? `Uploaded ${age}` : 'Available',
+          `Last uploaded: ${new Date(ds.qb_uploaded).toLocaleDateString()}${isStale ? '. Consider uploading a fresh export.' : ''}`,
+          isStale ? 'WARN' : 'OK');
+      } else {
+        cards += sc('QuickBooks P&L', 'Not uploaded',
+          'Upload a Profit & Loss Detail CSV from QuickBooks below.', 'MISS');
+      }
+      if (ds.last_sync) {
+        const age = syncAge(ds.last_sync);
+        cards += sc('SmartMoving Data', `Synced ${age}`,
+          `${ds.opp_count.toLocaleString()} opportunities in database. Last sync: ${new Date(ds.last_sync).toLocaleDateString()}.`, 'OK');
+      } else if (ds.opp_count > 0) {
+        cards += sc('SmartMoving Data', `${ds.opp_count.toLocaleString()} opportunities`,
+          'Data available but no sync logged.', 'OK');
+      } else {
+        cards += sc('SmartMoving Data', 'No data',
+          'Click Sync below to pull data from SmartMoving API.', 'MISS');
+      }
+      box.innerHTML = cards;
+    }).catch(() => {
+      document.getElementById('data-freshness').innerHTML = '';
+    });
   },
 
 };
@@ -963,8 +1079,8 @@ async function uploadPL() {
   }
 }
 
-// Load the first tab on page load
-loadTab('overview');
+// Load the first tab on page load (only if already authenticated)
+if (sessionStorage.getItem('mme_auth') === 'yes') loadTab('overview');
 </script>
 </body>
 </html>
