@@ -1078,16 +1078,18 @@ const renderers = {
       <div class="question-sub">Inbound call handling from Dialpad. Are we picking up the phone?</div>`;
 
     html += `<div class="scorecards">`;
-    html += sc('Total Inbound', d.total_inbound.toLocaleString(),
-      `${d.total_outbound.toLocaleString()} outbound calls in the same period.`, '');
+    html += sc('Real Inbound', d.total_inbound.toLocaleString(),
+      `Excludes ${(d.cancelled_spam || 0).toLocaleString()} cancelled/spam calls. ${d.total_outbound.toLocaleString()} outbound.`, '');
     html += sc('Answer Rate', d.answer_rate + '%',
-      `${d.answered.toLocaleString()} answered, ${d.missed.toLocaleString()} missed.`,
+      `${d.answered.toLocaleString()} answered, ${d.missed.toLocaleString()} missed, ${(d.abandoned || 0).toLocaleString()} abandoned.`,
       d.answer_rate >= 85 ? 'OK' : d.answer_rate >= 70 ? 'WARN' : 'MISS');
     html += sc('Missed Calls', d.missed.toLocaleString(),
-      `Each missed call is a potential customer lost. After-hours missed: ${d.after_hours_missed.toLocaleString()}.`,
+      `Real missed calls (not spam). After-hours: ${d.after_hours_missed.toLocaleString()}.`,
       d.missed > d.answered ? 'MISS' : d.missed > d.answered * 0.3 ? 'WARN' : 'OK');
     html += sc('Avg Call Duration', Math.round(d.avg_duration_seconds) + 's',
       'Average talk time for answered inbound calls.', '');
+    html += sc('Filtered as Spam', (d.cancelled_spam || 0).toLocaleString(),
+      'Short-ring cancelled calls excluded from metrics.', '');
     html += `</div>`;
 
     // Weekly trend

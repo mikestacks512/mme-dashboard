@@ -115,15 +115,23 @@ def get_call_center_report(days=90):
     if not records:
         return {"error": "No Dialpad data available. Check API key."}
 
-    # Parse records
-    inbound = [r for r in records if r.get("direction") == "inbound"]
-    outbound = [r for r in records if r.get("direction") == "outbound"]
-    answered = [r for r in inbound if r.get("date_connected")]
-    missed = [r for r in inbound if not r.get("date_connected")]
+    # Parse records by Dialpad category
+    inbound_all = [r for r in records if r.get("category") in ("incoming", "missed", "abandoned", "forwarded")]
+    cancelled = [r for r in records if r.get("category") == "cancelled"]  # Short-ring, likely spam
+    outbound = [r for r in records if r.get("category") == "outgoing"]
 
+    answered = [r for r in records if r.get("category") == "incoming"]
+    missed = [r for r in records if r.get("category") == "missed"]
+    abandoned = [r for r in records if r.get("category") == "abandoned"]
+    forwarded = [r for r in records if r.get("category") == "forwarded"]
+
+    # Real inbound = answered + missed + abandoned (excludes cancelled/spam)
+    inbound = answered + missed + abandoned
     total_inbound = len(inbound)
-    answered_count = len(answered)
+    answered_count = len(answered) + len(forwarded)
     missed_count = len(missed)
+    abandoned_count = len(abandoned)
+    cancelled_count = len(cancelled)
     answer_rate = round(answered_count / total_inbound * 100, 1) if total_inbound else 0
 
     # Average talk duration for answered calls
@@ -137,13 +145,16 @@ def get_call_center_report(days=90):
     avg_duration = round(sum(durations) / len(durations), 0) if durations else 0
 
     # Daily trend
-    daily = defaultdict(lambda: {"inbound": 0, "answered": 0, "missed": 0})
+    daily = defaultdict(lambda: {"inbound": 0, "answered": 0, "missed": 0, "abandoned": 0})
     for r in inbound:
         ds = r.get("date_started", "")[:10]
         if ds:
+            cat = r.get("category", "")
             daily[ds]["inbound"] += 1
-            if r.get("date_connected"):
+            if cat == "incoming":
                 daily[ds]["answered"] += 1
+            elif cat == "abandoned":
+                daily[ds]["abandoned"] += 1
             else:
                 daily[ds]["missed"] += 1
 
@@ -163,8 +174,9 @@ def get_call_center_report(days=90):
         ds = r.get("date_started", "")
         if len(ds) >= 13:
             hour = ds[11:13]
+            cat = r.get("category", "")
             hourly[hour]["inbound"] += 1
-            if r.get("date_connected"):
+            if cat == "incoming":
                 hourly[hour]["answered"] += 1
             else:
                 hourly[hour]["missed"] += 1
@@ -183,8 +195,9 @@ def get_call_center_report(days=90):
     by_target = defaultdict(lambda: {"inbound": 0, "answered": 0, "missed": 0})
     for r in inbound:
         target = r.get("name") or r.get("target_type") or "Unknown"
+        cat = r.get("category", "")
         by_target[target]["inbound"] += 1
-        if r.get("date_connected"):
+        if cat == "incoming":
             by_target[target]["answered"] += 1
         else:
             by_target[target]["missed"] += 1
@@ -207,7 +220,7 @@ def get_call_center_report(days=90):
             if hour < 8 or hour >= 18:
                 after_hours_missed += 1
 
-    # Weekly summary (last 4 weeks)
+    # Weekly summary (last 8 weeks)
     weekly = defaultdict(lambda: {"inbound": 0, "answered": 0, "missed": 0})
     for r in inbound:
         ds = r.get("date_started", "")[:10]
@@ -215,8 +228,9 @@ def get_call_center_report(days=90):
             try:
                 dt = datetime.strptime(ds, "%Y-%m-%d")
                 week_start = (dt - timedelta(days=dt.weekday())).strftime("%Y-%m-%d")
+                cat = r.get("category", "")
                 weekly[week_start]["inbound"] += 1
-                if r.get("date_connected"):
+                if cat == "incoming":
                     weekly[week_start]["answered"] += 1
                 else:
                     weekly[week_start]["missed"] += 1
@@ -241,6 +255,8 @@ def get_call_center_report(days=90):
         "total_outbound": len(outbound),
         "answered": answered_count,
         "missed": missed_count,
+        "abandoned": abandoned_count,
+        "cancelled_spam": cancelled_count,
         "answer_rate": answer_rate,
         "avg_duration_seconds": avg_duration,
         "after_hours_missed": after_hours_missed,
