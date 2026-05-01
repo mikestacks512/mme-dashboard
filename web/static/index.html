@@ -276,8 +276,14 @@ tr:hover td { background: #fafafa; }
   <div class="tab" data-tab="sales">Sales Reps</div>
   <div class="tab" data-tab="marketing">Marketing ROI</div>
   <div class="tab" data-tab="estimates">Pricing & Estimates</div>
+  <div class="tab" data-tab="cancellations">Cancellations</div>
+  <div class="tab" data-tab="pipeline">Pipeline</div>
+  <div class="tab" data-tab="callcenter">Call Center</div>
+  <div class="tab" data-tab="reviews">Reviews</div>
+  <div class="tab" data-tab="claims">Claims</div>
+  <div class="tab" data-tab="yoy">Year vs Year</div>
   <div class="tab" data-tab="trends">Trends</div>
-  <div class="tab" data-tab="data">Data Management</div>
+  <div class="tab" data-tab="data">Data Mgmt</div>
 </div>
 
 <div class="content">
@@ -287,6 +293,12 @@ tr:hover td { background: #fafafa; }
   <div class="panel" id="panel-sales"><div class="loading">Loading sales data...</div></div>
   <div class="panel" id="panel-marketing"><div class="loading">Loading marketing data...</div></div>
   <div class="panel" id="panel-estimates"><div class="loading">Loading estimates...</div></div>
+  <div class="panel" id="panel-cancellations"><div class="loading">Loading cancellation data...</div></div>
+  <div class="panel" id="panel-pipeline"><div class="loading">Loading pipeline...</div></div>
+  <div class="panel" id="panel-callcenter"><div class="loading">Loading call center data...</div></div>
+  <div class="panel" id="panel-reviews"><div class="loading">Loading reviews...</div></div>
+  <div class="panel" id="panel-claims"><div class="loading">Loading claims...</div></div>
+  <div class="panel" id="panel-yoy"><div class="loading">Loading year-over-year...</div></div>
   <div class="panel" id="panel-trends"><div class="loading">Loading trends...</div></div>
   <div class="panel" id="panel-data"></div>
 </div>
@@ -943,6 +955,349 @@ const renderers = {
   },
 
 
+  /* ── CANCELLATIONS ── */
+  cancellations(panel, d) {
+    const range = d.date_range_start && d.date_range_end
+      ? `${fmtDate(d.date_range_start)} \u2013 ${fmtDate(d.date_range_end)}` : null;
+    let html = stampLine([`${d.total_opportunities.toLocaleString()} total opportunities`, range]);
+
+    html += `<div class="question">Where Are We Losing Deals?</div>
+      <div class="question-sub">Cancelled and lost opportunities — revenue that walked away.</div>`;
+
+    html += `<div class="scorecards">`;
+    html += sc('Cancelled', d.cancelled_count.toLocaleString(),
+      `${d.cancellation_rate}% cancellation rate. ${fmtK(d.cancelled_revenue)} in lost revenue.`,
+      d.cancellation_rate > 40 ? 'MISS' : d.cancellation_rate > 25 ? 'WARN' : 'OK');
+    html += sc('Lost', d.lost_count.toLocaleString(),
+      `${d.lost_rate}% lost rate. ${fmtK(d.lost_revenue)} in lost revenue.`,
+      d.lost_rate > 10 ? 'MISS' : d.lost_rate > 5 ? 'WARN' : 'OK');
+    html += sc('Total Revenue Lost', fmtK(d.cancelled_revenue + d.lost_revenue),
+      'Combined cancelled and lost opportunity value.', '');
+    html += `</div>`;
+
+    html += `<div class="two-col">`;
+
+    // By rep
+    html += `<div class="section"><div class="section-title">Cancellations & Losses by Rep</div>`;
+    html += makeTable([
+      {label: 'Rep', key: 'rep'},
+      {label: 'Total Opps', key: 'total', align: 'right'},
+      {label: 'Cancelled', key: 'cancelled', align: 'right'},
+      {label: 'Lost', key: 'lost', align: 'right'},
+      {label: 'Cancel Rate', align: 'right', render: r => r.cancel_rate + '%'},
+      {label: 'Rev Lost', align: 'right', render: r => fmt(r.cancel_rev + r.lost_rev)},
+    ], d.by_rep);
+    html += `</div>`;
+
+    // By source
+    html += `<div class="section"><div class="section-title">By Lead Source</div>`;
+    html += makeTable([
+      {label: 'Source', key: 'source'},
+      {label: 'Total', key: 'total', align: 'right'},
+      {label: 'Cancelled', key: 'cancelled', align: 'right'},
+      {label: 'Lost', key: 'lost', align: 'right'},
+      {label: 'Cancel Rate', align: 'right', render: r => r.cancel_rate + '%'},
+    ], d.by_source.slice(0, 15));
+    html += `</div></div>`;
+
+    // Monthly trend
+    if (d.by_month && d.by_month.length) {
+      html += `<div class="question">Cancellation Trend by Month</div>`;
+      html += makeTable([
+        {label: 'Month', key: 'month'},
+        {label: 'Total Opps', key: 'total', align: 'right'},
+        {label: 'Cancelled', key: 'cancelled', align: 'right'},
+        {label: 'Lost', key: 'lost', align: 'right'},
+        {label: 'Cancel Rate', align: 'right', render: r => r.cancel_rate + '%'},
+        {label: 'Rev Lost', align: 'right', render: r => fmt(r.cancel_rev)},
+      ], d.by_month);
+    }
+
+    // Top cancelled
+    if (d.top_cancelled && d.top_cancelled.length) {
+      html += `<div class="question">Largest Cancelled Opportunities</div>`;
+      html += makeTable([
+        {label: 'Customer', key: 'customer'},
+        {label: 'Amount', align: 'right', render: r => `<strong>${fmt(r.estimated_total)}</strong>`},
+        {label: 'Service Date', key: 'service_date'},
+        {label: 'Rep', key: 'rep'},
+      ], d.top_cancelled);
+    }
+
+    panel.innerHTML = html;
+  },
+
+
+  /* ── PIPELINE ── */
+  pipeline(panel, d) {
+    let html = stampLine([`Updated ${new Date(d.generated).toLocaleString()}`]);
+
+    html += `<div class="question">Pipeline Forecast</div>
+      <div class="question-sub">Active opportunities not yet completed, lost, or cancelled.</div>`;
+
+    html += `<div class="scorecards">`;
+    html += sc('Total Pipeline', d.pipeline_count.toLocaleString(),
+      `${fmtK(d.pipeline_revenue)} in estimated revenue across all active opportunities.`, '');
+    html += sc('Next 30 Days', d.next_30.count.toLocaleString(),
+      `${fmtK(d.next_30.revenue)} in estimated revenue.`, '');
+    html += sc('Next 60 Days', d.next_60.count.toLocaleString(),
+      `${fmtK(d.next_60.revenue)} in estimated revenue.`, '');
+    html += sc('Next 90 Days', d.next_90.count.toLocaleString(),
+      `${fmtK(d.next_90.revenue)} in estimated revenue.`, '');
+    html += `</div>`;
+
+    // By status
+    html += `<div class="two-col">`;
+    html += `<div class="section"><div class="section-title">By Status</div>`;
+    html += makeTable([
+      {label: 'Status', key: 'status'},
+      {label: 'Count', key: 'count', align: 'right'},
+      {label: 'Est Revenue', align: 'right', render: r => fmt(r.revenue)},
+    ], d.by_status);
+    html += `</div>`;
+
+    // By rep
+    html += `<div class="section"><div class="section-title">Pipeline by Rep</div>`;
+    html += makeTable([
+      {label: 'Rep', key: 'rep'},
+      {label: 'Count', key: 'count', align: 'right'},
+      {label: 'Est Revenue', align: 'right', render: r => `<strong>${fmt(r.revenue)}</strong>`},
+      {label: 'Avg Job', align: 'right', render: r => fmt(r.avg_job)},
+    ], d.by_rep);
+    html += `</div></div>`;
+
+    panel.innerHTML = html;
+  },
+
+
+  /* ── CALL CENTER ── */
+  callcenter(panel, d) {
+    let html = stampLine([`Last ${d.period_days} days`, `${d.total_calls.toLocaleString()} total calls`]);
+
+    html += `<div class="question">Call Center Performance</div>
+      <div class="question-sub">Inbound call handling from Dialpad. Are we picking up the phone?</div>`;
+
+    html += `<div class="scorecards">`;
+    html += sc('Total Inbound', d.total_inbound.toLocaleString(),
+      `${d.total_outbound.toLocaleString()} outbound calls in the same period.`, '');
+    html += sc('Answer Rate', d.answer_rate + '%',
+      `${d.answered.toLocaleString()} answered, ${d.missed.toLocaleString()} missed.`,
+      d.answer_rate >= 85 ? 'OK' : d.answer_rate >= 70 ? 'WARN' : 'MISS');
+    html += sc('Missed Calls', d.missed.toLocaleString(),
+      `Each missed call is a potential customer lost. After-hours missed: ${d.after_hours_missed.toLocaleString()}.`,
+      d.missed > d.answered ? 'MISS' : d.missed > d.answered * 0.3 ? 'WARN' : 'OK');
+    html += sc('Avg Call Duration', Math.round(d.avg_duration_seconds) + 's',
+      'Average talk time for answered inbound calls.', '');
+    html += `</div>`;
+
+    // Weekly trend
+    if (d.weekly_trend && d.weekly_trend.length) {
+      html += `<div class="question">Weekly Trend</div>`;
+      html += makeTable([
+        {label: 'Week Of', key: 'week_of'},
+        {label: 'Inbound', key: 'inbound', align: 'right'},
+        {label: 'Answered', key: 'answered', align: 'right'},
+        {label: 'Missed', key: 'missed', align: 'right'},
+        {label: 'Answer Rate', align: 'right', render: r => {
+          const c = r.answer_rate >= 85 ? 'var(--green)' : r.answer_rate >= 70 ? 'var(--yellow)' : 'var(--red)';
+          return `<span style="color:${c};font-weight:600">${r.answer_rate}%</span>`;
+        }},
+      ], d.weekly_trend);
+    }
+
+    // Hourly distribution
+    if (d.hourly_distribution && d.hourly_distribution.length) {
+      html += `<div class="question">When Are Calls Coming In?</div>
+        <div class="question-sub">Hourly breakdown helps you staff appropriately.</div>`;
+      html += makeTable([
+        {label: 'Hour', key: 'hour'},
+        {label: 'Inbound', key: 'inbound', align: 'right'},
+        {label: 'Answered', key: 'answered', align: 'right'},
+        {label: 'Missed', key: 'missed', align: 'right'},
+        {label: 'Answer Rate', align: 'right', render: r => r.answer_rate + '%'},
+      ], d.hourly_distribution);
+    }
+
+    // By target
+    if (d.by_target && d.by_target.length) {
+      html += `<div class="question">By Line / Call Center</div>`;
+      html += makeTable([
+        {label: 'Name', key: 'name'},
+        {label: 'Inbound', key: 'inbound', align: 'right'},
+        {label: 'Answered', key: 'answered', align: 'right'},
+        {label: 'Missed', key: 'missed', align: 'right'},
+        {label: 'Answer Rate', align: 'right', render: r => r.answer_rate + '%'},
+      ], d.by_target);
+    }
+
+    panel.innerHTML = html;
+  },
+
+
+  /* ── REVIEWS ── */
+  reviews(panel, d) {
+    let html = stampLine([`Updated ${new Date(d.generated).toLocaleString()}`]);
+
+    html += `<div class="question">Customer Reviews</div>
+      <div class="question-sub">Google Business Profile reviews and ratings.</div>`;
+
+    html += `<div class="scorecards">`;
+    html += sc('Total Reviews', d.total_reviews.toLocaleString(), '', '');
+    html += sc('Average Rating', d.average_rating.toFixed(1) + ' / 5',
+      d.average_rating >= 4.5 ? 'Excellent reputation.' : d.average_rating >= 4.0 ? 'Good but room to improve.' : 'Needs attention.',
+      d.average_rating >= 4.5 ? 'OK' : d.average_rating >= 4.0 ? 'WARN' : 'MISS');
+    if (d.rating_distribution) {
+      const fivestar = d.rating_distribution['5'] || 0;
+      const pct = d.total_reviews > 0 ? Math.round(fivestar / d.total_reviews * 100) : 0;
+      html += sc('5-Star Rate', pct + '%', `${fivestar} of ${d.total_reviews} reviews are 5 stars.`, pct >= 80 ? 'OK' : 'WARN');
+    }
+    html += `</div>`;
+
+    // Rating distribution
+    if (d.rating_distribution) {
+      html += `<div class="section"><div class="section-title">Rating Distribution</div>`;
+      const dist = [];
+      for (let i = 5; i >= 1; i--) {
+        dist.push({star: i + ' stars', count: d.rating_distribution[String(i)] || 0});
+      }
+      html += makeBars(dist, 'star', 'count', {color: 'green'});
+      html += `</div>`;
+    }
+
+    // Recent reviews
+    if (d.recent_reviews && d.recent_reviews.length) {
+      html += `<div class="question">Recent Reviews</div>`;
+      html += makeTable([
+        {label: 'Date', key: 'date'},
+        {label: 'Rating', align: 'right', render: r => '\u2605'.repeat(r.rating) + '\u2606'.repeat(5 - r.rating)},
+        {label: 'Reviewer', key: 'reviewer'},
+        {label: 'Review', key: 'text'},
+      ], d.recent_reviews);
+    }
+
+    // Monthly trend
+    if (d.by_month && d.by_month.length) {
+      html += `<div class="question">Reviews by Month</div>`;
+      html += makeTable([
+        {label: 'Month', key: 'month'},
+        {label: 'Reviews', key: 'count', align: 'right'},
+        {label: 'Avg Rating', align: 'right', render: r => r.avg_rating.toFixed(1)},
+      ], d.by_month);
+    }
+
+    panel.innerHTML = html;
+  },
+
+
+  /* ── CLAIMS ── */
+  claims(panel, d) {
+    let html = stampLine([`Updated ${new Date(d.generated).toLocaleString()}`]);
+
+    html += `<div class="question">Claims & Damage Tracking</div>
+      <div class="question-sub">Track damage claims to identify patterns and reduce liability.</div>`;
+
+    html += `<div class="scorecards">`;
+    html += sc('Total Claims', d.total_claims.toLocaleString(), '', '');
+    html += sc('Total Amount', fmtK(d.total_amount), '', '');
+    html += sc('Open Claims', d.open_count.toLocaleString(),
+      `${d.resolved_count} resolved.`, d.open_count > 5 ? 'WARN' : 'OK');
+    if (d.total_claims > 0) {
+      html += sc('Avg Claim', fmt(d.total_amount / d.total_claims), '', '');
+    }
+    html += `</div>`;
+
+    // Claims list
+    if (d.claims && d.claims.length) {
+      html += `<div class="question">All Claims</div>`;
+      html += makeTable([
+        {label: 'Date', key: 'date'},
+        {label: 'Customer', key: 'customer'},
+        {label: 'Amount', align: 'right', render: r => `<strong>${fmt(r.amount)}</strong>`},
+        {label: 'Description', key: 'description'},
+        {label: 'Status', align: 'right', render: r => badge(r.status === 'Open' ? 'WARN' : 'OK')},
+      ], d.claims);
+    }
+
+    // By month
+    if (d.by_month && d.by_month.length) {
+      html += `<div class="question">Claims by Month</div>`;
+      html += makeTable([
+        {label: 'Month', key: 'month'},
+        {label: 'Claims', key: 'count', align: 'right'},
+        {label: 'Amount', align: 'right', render: r => fmt(r.amount)},
+      ], d.by_month);
+    }
+
+    panel.innerHTML = html;
+  },
+
+
+  /* ── YEAR OVER YEAR ── */
+  yoy(panel, d) {
+    let html = stampLine([`Updated ${new Date(d.generated).toLocaleString()}`]);
+
+    html += `<div class="question">Year-over-Year Comparison</div>
+      <div class="question-sub">How does this year compare to last year?</div>`;
+
+    // Summary cards per year
+    if (d.by_year && d.by_year.length) {
+      html += `<div class="scorecards">`;
+      d.by_year.forEach(y => {
+        html += sc(y.year + ' Opportunities', y.total_opps.toLocaleString(),
+          `Booked: ${y.booked} (${y.booking_rate}%) | Revenue: ${fmtK(y.booked_revenue)} | Avg: ${fmt(y.avg_job)}`, '');
+      });
+      html += `</div>`;
+
+      // Table comparison
+      html += `<div class="section"><div class="section-title">Year Summary</div>`;
+      html += makeTable([
+        {label: 'Year', key: 'year'},
+        {label: 'Opportunities', key: 'total_opps', align: 'right'},
+        {label: 'Booked', key: 'booked', align: 'right'},
+        {label: 'Booking Rate', align: 'right', render: r => r.booking_rate + '%'},
+        {label: 'Revenue', align: 'right', render: r => `<strong>${fmtK(r.booked_revenue)}</strong>`},
+        {label: 'Avg Job', align: 'right', render: r => fmt(r.avg_job)},
+        {label: 'Cancelled', key: 'cancelled', align: 'right'},
+        {label: 'Lost', key: 'lost', align: 'right'},
+      ], d.by_year);
+      html += `</div>`;
+    }
+
+    // Monthly comparison
+    if (d.monthly_comparison && d.monthly_comparison.length) {
+      html += `<div class="question">Month-by-Month Comparison</div>`;
+      html += makeTable([
+        {label: 'Month', key: 'month_label'},
+        {label: d.years ? d.years[0] + ' Opps' : 'Yr1 Opps', align: 'right', render: r => r.year1_opps ?? '-'},
+        {label: d.years ? d.years[0] + ' Booked' : 'Yr1 Bkd', align: 'right', render: r => r.year1_booked ?? '-'},
+        {label: d.years ? d.years[1] + ' Opps' : 'Yr2 Opps', align: 'right', render: r => r.year2_opps ?? '-'},
+        {label: d.years ? d.years[1] + ' Booked' : 'Yr2 Bkd', align: 'right', render: r => r.year2_booked ?? '-'},
+        {label: 'Change', align: 'right', render: r => {
+          if (r.year1_opps == null || r.year2_opps == null) return '-';
+          const diff = r.year2_opps - r.year1_opps;
+          const c = diff >= 0 ? 'var(--green)' : 'var(--red)';
+          return `<span style="color:${c}">${diff >= 0 ? '+' : ''}${diff}</span>`;
+        }},
+      ], d.monthly_comparison);
+    }
+
+    // QB financial YoY
+    if (d.qb_by_year && d.qb_by_year.length) {
+      html += `<div class="question">Financial Year-over-Year</div>
+        <div class="question-sub">Revenue and margins from QuickBooks data.</div>`;
+      html += makeTable([
+        {label: 'Year', key: 'year'},
+        {label: 'Revenue', align: 'right', render: r => `<strong>${fmtK(r.revenue)}</strong>`},
+        {label: 'COGS', align: 'right', render: r => fmtK(r.cogs)},
+        {label: 'Gross Profit', align: 'right', render: r => fmtK(r.gross_profit)},
+        {label: 'Margin', align: 'right', render: r => r.margin + '%'},
+      ], d.qb_by_year);
+    }
+
+    panel.innerHTML = html;
+  },
+
+
   /* ── DATA MANAGEMENT ── */
   data(panel) {
     let html = `<div class="question">Data Management</div>
@@ -980,6 +1335,34 @@ const renderers = {
         border-radius:8px; font-size:14px; font-weight:600; cursor:pointer;
       ">Upload P&L CSV</button>
       <div id="upload-status" style="margin-top:12px;font-size:13px;color:var(--text-dim)"></div>
+    </div>`;
+
+    // Reviews Upload
+    html += `<div class="scorecard" style="margin-bottom:20px">
+      <div class="sc-label">GOOGLE REVIEWS UPLOAD</div>
+      <p style="font-size:13px;color:var(--text-dim);margin-bottom:8px">
+        Upload a CSV with columns: <code>date,rating,reviewer,text</code>
+      </p>
+      <input type="file" id="reviews-file" accept=".csv" style="margin-bottom:8px;font-size:13px"><br>
+      <button onclick="uploadFile('reviews-file', '/api/upload-reviews', 'reviews-upload-status')" style="
+        padding:8px 18px; background:var(--accent); color:#fff; border:none;
+        border-radius:8px; font-size:13px; font-weight:600; cursor:pointer;
+      ">Upload Reviews CSV</button>
+      <div id="reviews-upload-status" style="margin-top:8px;font-size:13px;color:var(--text-dim)"></div>
+    </div>`;
+
+    // Claims Upload
+    html += `<div class="scorecard" style="margin-bottom:20px">
+      <div class="sc-label">CLAIMS & DAMAGE UPLOAD</div>
+      <p style="font-size:13px;color:var(--text-dim);margin-bottom:8px">
+        Upload a CSV with columns: <code>date,customer,amount,description,status</code>
+      </p>
+      <input type="file" id="claims-file" accept=".csv" style="margin-bottom:8px;font-size:13px"><br>
+      <button onclick="uploadFile('claims-file', '/api/upload-claims', 'claims-upload-status')" style="
+        padding:8px 18px; background:var(--accent); color:#fff; border:none;
+        border-radius:8px; font-size:13px; font-weight:600; cursor:pointer;
+      ">Upload Claims CSV</button>
+      <div id="claims-upload-status" style="margin-top:8px;font-size:13px;color:var(--text-dim)"></div>
     </div>`;
 
     panel.innerHTML = html;
@@ -1069,6 +1452,29 @@ async function pollSync() {
     }
   };
   setTimeout(check, 10000);
+}
+
+async function uploadFile(inputId, endpoint, statusId) {
+  const fileInput = document.getElementById(inputId);
+  const status = document.getElementById(statusId);
+  if (!fileInput.files.length) {
+    status.innerHTML = '<span style="color:var(--red)">Please select a CSV file first.</span>';
+    return;
+  }
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  try {
+    const resp = await fetch(endpoint, {method: 'POST', body: formData});
+    const data = await resp.json();
+    if (data.error) {
+      status.innerHTML = `<span style="color:var(--red)">${data.error}</span>`;
+    } else {
+      status.innerHTML = `<span style="color:var(--green)">${data.message}</span>`;
+      cache = {};
+    }
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--red)">Upload failed: ${e.message}</span>`;
+  }
 }
 
 async function uploadPL() {

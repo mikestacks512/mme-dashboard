@@ -946,3 +946,571 @@ def get_cfo():
         "recommendation_count": len(recommendations),
         "recommendations": recommendations,
     }
+
+
+# ── Report: Cancellations ──
+
+def get_cancellations():
+    """Analyse cancelled and lost opportunities."""
+    con = _get_duckdb()
+    if not con:
+        return {"error": "DuckDB not found. Run fast_sync.py first."}
+
+    total_opps = con.execute("SELECT COUNT(*) FROM opportunities").fetchone()[0]
+    if total_opps == 0:
+        con.close()
+        return {"error": "No opportunities in DuckDB."}
+
+    # Cancelled summary
+    cancelled = con.execute("""
+        SELECT COUNT(*), COALESCE(SUM(estimated_total), 0)
+        FROM opportunities WHERE status = 30
+    """).fetchone()
+
+    # Lost summary
+    lost = con.execute("""
+        SELECT COUNT(*), COALESCE(SUM(estimated_total), 0)
+        FROM opportunities WHERE status = 20
+    """).fetchone()
+
+    cancel_rate = round(cancelled[0] / total_opps * 100, 1) if total_opps else 0
+    lost_rate = round(lost[0] / total_opps * 100, 1) if total_opps else 0
+
+    # By rep
+    by_rep = con.execute("""
+        SELECT
+            COALESCE(sales_assignee, 'Unassigned') as rep,
+            COUNT(*) as total,
+            SUM(CASE WHEN status = 30 THEN 1 ELSE 0 END) as cancelled,
+            SUM(CASE WHEN status = 20 THEN 1 ELSE 0 END) as lost,
+            SUM(CASE WHEN status = 30 THEN estimated_total ELSE 0 END) as cancel_rev,
+            SUM(CASE WHEN status = 20 THEN estimated_total ELSE 0 END) as lost_rev
+        FROM opportunities
+        GROUP BY COALESCE(sales_assignee, 'Unassigned')
+        HAVING cancelled > 0 OR lost > 0
+        ORDER BY cancelled + lost DESC
+    """).fetchall()
+
+    # By month (using service_date)
+    by_month = con.execute("""
+        SELECT
+            SUBSTR(CAST(service_date AS VARCHAR), 1, 6) as month,
+            SUM(CASE WHEN status = 30 THEN 1 ELSE 0 END) as cancelled,
+            SUM(CASE WHEN status = 20 THEN 1 ELSE 0 END) as lost,
+            COUNT(*) as total,
+            SUM(CASE WHEN status = 30 THEN estimated_total ELSE 0 END) as cancel_rev
+        FROM opportunities
+        WHERE service_date > 0
+        GROUP BY SUBSTR(CAST(service_date AS VARCHAR), 1, 6)
+        ORDER BY month
+    """).fetchall()
+
+    # By referral source
+    by_source = con.execute("""
+        SELECT
+            COALESCE(referral_source, 'Unknown') as source,
+            COUNT(*) as total,
+            SUM(CASE WHEN status = 30 THEN 1 ELSE 0 END) as cancelled,
+            SUM(CASE WHEN status = 20 THEN 1 ELSE 0 END) as lost
+        FROM opportunities
+        GROUP BY COALESCE(referral_source, 'Unknown')
+        HAVING cancelled > 0 OR lost > 0
+        ORDER BY cancelled + lost DESC
+    """).fetchall()
+
+    # Top 10 largest cancelled
+    top_cancelled = con.execute("""
+        SELECT customer_name, estimated_total, service_date, sales_assignee
+        FROM opportunities
+        WHERE status = 30 AND estimated_total > 0
+        ORDER BY estimated_total DESC
+        LIMIT 10
+    """).fetchall()
+
+    # Date range and last sync
+    date_range = con.execute(
+        "SELECT MIN(service_date), MAX(service_date) FROM opportunities WHERE service_date > 0"
+    ).fetchone()
+    last_sync = _get_last_sync(con, "opportunities")
+
+    con.close()
+
+    return {
+        "generated": datetime.now().isoformat(),
+        "date_range_start": _format_yyyymmdd(date_range[0]) if date_range and date_range[0] else None,
+        "date_range_end": _format_yyyymmdd(date_range[1]) if date_range and date_range[1] else None,
+        "last_sync": last_sync,
+        "total_opportunities": total_opps,
+        "cancelled_count": cancelled[0],
+        "cancelled_revenue": round(cancelled[1], 2),
+        "cancellation_rate": cancel_rate,
+        "lost_count": lost[0],
+        "lost_revenue": round(lost[1], 2),
+        "lost_rate": lost_rate,
+        "by_rep": [
+            {"rep": r, "total": t, "cancelled": c, "lost": l,
+             "cancel_rate": round(c / t * 100, 1) if t else 0,
+             "cancel_rev": round(cr or 0, 2), "lost_rev": round(lr or 0, 2)}
+            for r, t, c, l, cr, lr in by_rep
+        ],
+        "by_month": [
+            {"month": f"{m[:4]}-{m[4:]}", "cancelled": c, "lost": l, "total": t,
+             "cancel_rate": round(c / t * 100, 1) if t else 0,
+             "cancel_rev": round(cr or 0, 2)}
+            for m, c, l, t, cr in by_month
+        ],
+        "by_source": [
+            {"source": s, "total": t, "cancelled": c, "lost": l,
+             "cancel_rate": round(c / t * 100, 1) if t else 0}
+            for s, t, c, l in by_source
+        ],
+        "top_cancelled": [
+            {"customer": name or "Unknown", "estimated_total": round(est or 0, 2),
+             "service_date": _format_yyyymmdd(sd) if sd else "N/A",
+             "rep": rep or "Unassigned"}
+            for name, est, sd, rep in top_cancelled
+        ],
+    }
+
+
+# ── Report: Pipeline ──
+
+def get_pipeline():
+    """Forecast from active pipeline (non-terminal statuses)."""
+    con = _get_duckdb()
+    if not con:
+        return {"error": "DuckDB not found. Run fast_sync.py first."}
+
+    opp_count = con.execute("SELECT COUNT(*) FROM opportunities").fetchone()[0]
+    if opp_count == 0:
+        con.close()
+        return {"error": "No opportunities in DuckDB."}
+
+    now = datetime.now()
+    today_int = int(now.strftime("%Y%m%d"))
+    day30 = int((now + timedelta(days=30)).strftime("%Y%m%d"))
+    day60 = int((now + timedelta(days=60)).strftime("%Y%m%d"))
+    day90 = int((now + timedelta(days=90)).strftime("%Y%m%d"))
+
+    status_labels = {0: "New", 1: "Estimated", 2: "Follow Up", 3: "Booked", 5: "Confirmed"}
+    active_statuses = (0, 1, 2, 3, 5)
+
+    # Total pipeline
+    pipeline_total = con.execute("""
+        SELECT COUNT(*), COALESCE(SUM(estimated_total), 0)
+        FROM opportunities WHERE status IN (0,1,2,3,5)
+    """).fetchone()
+
+    # By status breakdown
+    by_status = con.execute("""
+        SELECT status, COUNT(*), COALESCE(SUM(estimated_total), 0)
+        FROM opportunities WHERE status IN (0,1,2,3,5)
+        GROUP BY status ORDER BY status
+    """).fetchall()
+
+    # Next 30/60/90 days
+    next30 = con.execute("""
+        SELECT COUNT(*), COALESCE(SUM(estimated_total), 0)
+        FROM opportunities
+        WHERE status IN (0,1,2,3,5) AND service_date >= ? AND service_date <= ?
+    """, [today_int, day30]).fetchone()
+
+    next60 = con.execute("""
+        SELECT COUNT(*), COALESCE(SUM(estimated_total), 0)
+        FROM opportunities
+        WHERE status IN (0,1,2,3,5) AND service_date >= ? AND service_date <= ?
+    """, [today_int, day60]).fetchone()
+
+    next90 = con.execute("""
+        SELECT COUNT(*), COALESCE(SUM(estimated_total), 0)
+        FROM opportunities
+        WHERE status IN (0,1,2,3,5) AND service_date >= ? AND service_date <= ?
+    """, [today_int, day90]).fetchone()
+
+    # By rep
+    by_rep = con.execute("""
+        SELECT
+            COALESCE(sales_assignee, 'Unassigned') as rep,
+            COUNT(*) as cnt,
+            COALESCE(SUM(estimated_total), 0) as est_rev
+        FROM opportunities WHERE status IN (0,1,2,3,5)
+        GROUP BY COALESCE(sales_assignee, 'Unassigned')
+        ORDER BY est_rev DESC
+    """).fetchall()
+
+    # Average days from created to service date
+    avg_days = con.execute("""
+        SELECT AVG(
+            (CAST(SUBSTR(CAST(service_date AS VARCHAR), 1, 4) AS INTEGER) * 365 +
+             CAST(SUBSTR(CAST(service_date AS VARCHAR), 5, 2) AS INTEGER) * 30 +
+             CAST(SUBSTR(CAST(service_date AS VARCHAR), 7, 2) AS INTEGER))
+            -
+            (CAST(SUBSTR(CAST(CAST(created_at_utc AS DATE) AS VARCHAR), 1, 4) AS INTEGER) * 365 +
+             CAST(SUBSTR(CAST(CAST(created_at_utc AS DATE) AS VARCHAR), 6, 2) AS INTEGER) * 30 +
+             CAST(SUBSTR(CAST(CAST(created_at_utc AS DATE) AS VARCHAR), 9, 2) AS INTEGER))
+        )
+        FROM opportunities
+        WHERE status IN (0,1,2,3,5) AND service_date > 0 AND created_at_utc IS NOT NULL
+    """).fetchone()
+
+    last_sync = _get_last_sync(con, "opportunities")
+    con.close()
+
+    return {
+        "generated": datetime.now().isoformat(),
+        "last_sync": last_sync,
+        "total_pipeline_count": pipeline_total[0],
+        "total_pipeline_revenue": round(pipeline_total[1], 2),
+        "by_status": [
+            {"status": status_labels.get(s, f"Status {s}"), "count": c, "est_revenue": round(r, 2)}
+            for s, c, r in by_status
+        ],
+        "next_30_days": {"count": next30[0], "est_revenue": round(next30[1], 2)},
+        "next_60_days": {"count": next60[0], "est_revenue": round(next60[1], 2)},
+        "next_90_days": {"count": next90[0], "est_revenue": round(next90[1], 2)},
+        "by_rep": [
+            {"rep": r, "count": c, "est_revenue": round(rv, 2)}
+            for r, c, rv in by_rep
+        ],
+        "avg_days_created_to_service": round(avg_days[0]) if avg_days and avg_days[0] else None,
+    }
+
+
+# ── Report: Reviews ──
+
+def get_reviews():
+    """Read reviews from CSV in exports directory."""
+    if not os.path.exists(EXPORT_DIR):
+        return {"error": "No reviews data. Upload a CSV via Data Management."}
+
+    # Find review CSV
+    review_file = None
+    for name in os.listdir(EXPORT_DIR):
+        if "review" in name.lower() and name.endswith(".csv"):
+            review_file = os.path.join(EXPORT_DIR, name)
+            break
+
+    if not review_file:
+        return {"error": "No reviews data. Upload a CSV via Data Management."}
+
+    reviews = []
+    try:
+        with open(review_file) as f:
+            reader = csv.reader(f)
+            header = next(reader, None)  # skip header
+            for row in reader:
+                if len(row) < 4:
+                    continue
+                try:
+                    rating = int(float(row[1]))
+                except (ValueError, IndexError):
+                    rating = 0
+                reviews.append({
+                    "date": row[0].strip(),
+                    "rating": rating,
+                    "reviewer": row[2].strip(),
+                    "text": row[3].strip(),
+                })
+    except Exception as e:
+        return {"error": f"Error reading reviews CSV: {e}"}
+
+    if not reviews:
+        return {"error": "Reviews CSV is empty."}
+
+    total = len(reviews)
+    ratings = [r["rating"] for r in reviews if r["rating"] > 0]
+    avg_rating = round(sum(ratings) / len(ratings), 2) if ratings else 0
+
+    # Rating distribution
+    dist = Counter(ratings)
+    rating_distribution = [
+        {"stars": s, "count": dist.get(s, 0), "pct": round(dist.get(s, 0) / total * 100, 1) if total else 0}
+        for s in range(5, 0, -1)
+    ]
+
+    # By month
+    by_month = defaultdict(lambda: {"count": 0, "total_rating": 0})
+    for r in reviews:
+        try:
+            dt = datetime.strptime(r["date"], "%m/%d/%Y")
+            mk = dt.strftime("%Y-%m")
+        except ValueError:
+            try:
+                dt = datetime.strptime(r["date"], "%Y-%m-%d")
+                mk = dt.strftime("%Y-%m")
+            except ValueError:
+                continue
+        by_month[mk]["count"] += 1
+        by_month[mk]["total_rating"] += r["rating"]
+
+    monthly = []
+    for m in sorted(by_month.keys()):
+        d = by_month[m]
+        monthly.append({
+            "month": m, "count": d["count"],
+            "avg_rating": round(d["total_rating"] / d["count"], 2) if d["count"] else 0,
+        })
+
+    # Recent 10
+    recent = reviews[-10:] if len(reviews) >= 10 else reviews[:]
+    recent.reverse()
+
+    return {
+        "generated": datetime.now().isoformat(),
+        "total_reviews": total,
+        "average_rating": avg_rating,
+        "rating_distribution": rating_distribution,
+        "by_month": monthly,
+        "recent_reviews": recent,
+    }
+
+
+# ── Report: Claims ──
+
+def get_claims():
+    """Read claims from CSV in exports directory."""
+    if not os.path.exists(EXPORT_DIR):
+        return {"error": "No claims data. Upload a CSV via Data Management."}
+
+    # Find claims CSV
+    claims_file = None
+    for name in os.listdir(EXPORT_DIR):
+        if "claim" in name.lower() and name.endswith(".csv"):
+            claims_file = os.path.join(EXPORT_DIR, name)
+            break
+
+    if not claims_file:
+        return {"error": "No claims data. Upload a CSV via Data Management."}
+
+    claims = []
+    try:
+        with open(claims_file) as f:
+            reader = csv.reader(f)
+            header = next(reader, None)  # skip header
+            for row in reader:
+                if len(row) < 5:
+                    continue
+                try:
+                    amount = float(row[2].strip().replace("$", "").replace(",", ""))
+                except (ValueError, IndexError):
+                    amount = 0.0
+                claims.append({
+                    "date": row[0].strip(),
+                    "customer": row[1].strip(),
+                    "amount": round(amount, 2),
+                    "description": row[3].strip(),
+                    "status": row[4].strip(),
+                })
+    except Exception as e:
+        return {"error": f"Error reading claims CSV: {e}"}
+
+    if not claims:
+        return {"error": "Claims CSV is empty."}
+
+    total = len(claims)
+    total_amount = round(sum(c["amount"] for c in claims), 2)
+    open_count = sum(1 for c in claims if c["status"].lower() in ("open", "pending", "new"))
+    resolved_count = sum(1 for c in claims if c["status"].lower() in ("resolved", "closed", "paid", "settled"))
+
+    # By month
+    by_month = defaultdict(lambda: {"count": 0, "total_amount": 0})
+    for c in claims:
+        try:
+            dt = datetime.strptime(c["date"], "%m/%d/%Y")
+            mk = dt.strftime("%Y-%m")
+        except ValueError:
+            try:
+                dt = datetime.strptime(c["date"], "%Y-%m-%d")
+                mk = dt.strftime("%Y-%m")
+            except ValueError:
+                continue
+        by_month[mk]["count"] += 1
+        by_month[mk]["total_amount"] += c["amount"]
+
+    monthly = []
+    for m in sorted(by_month.keys()):
+        d = by_month[m]
+        monthly.append({
+            "month": m, "count": d["count"], "total_amount": round(d["total_amount"], 2),
+        })
+
+    # Recent claims (last 10 from the list)
+    recent = claims[-10:] if len(claims) >= 10 else claims[:]
+    recent.reverse()
+
+    return {
+        "generated": datetime.now().isoformat(),
+        "total_claims": total,
+        "total_amount": total_amount,
+        "open_count": open_count,
+        "resolved_count": resolved_count,
+        "by_month": monthly,
+        "recent_claims": recent,
+    }
+
+
+# ── Report: Year-over-Year ──
+
+def get_yoy():
+    """Year-over-year comparison of opportunities and financials."""
+    con = _get_duckdb()
+    if not con:
+        return {"error": "DuckDB not found. Run fast_sync.py first."}
+
+    opp_count = con.execute("SELECT COUNT(*) FROM opportunities").fetchone()[0]
+    if opp_count == 0:
+        con.close()
+        return {"error": "No opportunities in DuckDB."}
+
+    # By year
+    by_year = con.execute("""
+        SELECT
+            SUBSTR(CAST(service_date AS VARCHAR), 1, 4) as year,
+            COUNT(*) as total_opps,
+            SUM(CASE WHEN status IN (3,5,10,11) THEN 1 ELSE 0 END) as booked,
+            SUM(CASE WHEN status IN (3,5,10,11) THEN estimated_total ELSE 0 END) as booked_rev,
+            SUM(estimated_total) as total_est_rev,
+            AVG(CASE WHEN status IN (3,5,10,11) AND estimated_total > 0 THEN estimated_total END) as avg_job
+        FROM opportunities
+        WHERE service_date > 0
+        GROUP BY SUBSTR(CAST(service_date AS VARCHAR), 1, 4)
+        ORDER BY year
+    """).fetchall()
+
+    # Monthly by year-month for side-by-side
+    monthly_raw = con.execute("""
+        SELECT
+            SUBSTR(CAST(service_date AS VARCHAR), 1, 4) as year,
+            SUBSTR(CAST(service_date AS VARCHAR), 5, 2) as month_num,
+            COUNT(*) as opps,
+            SUM(CASE WHEN status IN (3,5,10,11) THEN 1 ELSE 0 END) as booked,
+            SUM(CASE WHEN status IN (3,5,10,11) THEN estimated_total ELSE 0 END) as booked_rev,
+            AVG(CASE WHEN estimated_total > 0 THEN estimated_total END) as avg_est
+        FROM opportunities
+        WHERE service_date > 0
+        GROUP BY SUBSTR(CAST(service_date AS VARCHAR), 1, 4),
+                 SUBSTR(CAST(service_date AS VARCHAR), 5, 2)
+        ORDER BY year, month_num
+    """).fetchall()
+
+    last_sync = _get_last_sync(con, "opportunities")
+    con.close()
+
+    # Build year summaries
+    years = []
+    for y, total, booked, booked_rev, total_rev, avg_job in by_year:
+        booking_rate = round(booked / total * 100, 1) if total else 0
+        years.append({
+            "year": y, "total_opps": total, "booked": booked,
+            "booking_rate": booking_rate,
+            "total_est_revenue": round(total_rev or 0, 2),
+            "booked_revenue": round(booked_rev or 0, 2),
+            "avg_job_size": round(avg_job or 0, 2),
+        })
+
+    # Build monthly comparison grouped by month number
+    year_list = sorted(set(r[0] for r in monthly_raw))
+    monthly_data = defaultdict(dict)
+    for y, mn, opps, booked, rev, avg in monthly_raw:
+        monthly_data[mn][y] = {
+            "opps": opps, "booked": booked,
+            "booked_rev": round(rev or 0, 2),
+            "avg_est": round(avg or 0, 2),
+        }
+
+    month_names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    monthly_comparison = []
+    for mn in sorted(monthly_data.keys()):
+        entry = {"month": month_names[int(mn)] if mn.isdigit() and 1 <= int(mn) <= 12 else mn}
+        for y in year_list:
+            entry[y] = monthly_data[mn].get(y, None)
+        monthly_comparison.append(entry)
+
+    # QB monthly data split by year
+    qb_monthly = _load_qb_monthly()
+    qb_by_year = defaultdict(dict)
+    for mk, data in qb_monthly.items():
+        year = mk[:4]
+        month = mk[5:]
+        rev = data.get("revenue", 0)
+        cogs = data.get("cogs", 0)
+        gp = rev - cogs
+        margin = round(gp / rev * 100, 1) if rev else 0
+        qb_by_year[year][month] = {
+            "revenue": round(rev, 2), "cogs": round(cogs, 2),
+            "gross_profit": round(gp, 2), "margin": margin,
+        }
+
+    return {
+        "generated": datetime.now().isoformat(),
+        "last_sync": last_sync,
+        "years": years,
+        "year_list": year_list,
+        "monthly_comparison": monthly_comparison,
+        "qb_by_year": dict(qb_by_year),
+    }
+
+
+# ── Report: Monthly Detail ──
+
+def get_monthly_detail(month):
+    """Detailed P&L for a specific month (format YYYY-MM)."""
+    if not month or len(month) != 7 or month[4] != "-":
+        return {"error": "Invalid month format. Use YYYY-MM (e.g. 2025-04)."}
+
+    qb_monthly = _load_qb_monthly()
+    if not qb_monthly:
+        return {"error": "No QuickBooks data. Upload a P&L CSV via Data Management."}
+
+    if month not in qb_monthly:
+        available = sorted(qb_monthly.keys())
+        return {"error": f"No data for {month}. Available months: {', '.join(available)}"}
+
+    data = qb_monthly[month]
+    revenue = data.get("revenue", 0)
+    cogs = data.get("cogs", 0)
+    overhead = data.get("overhead", 0)
+    other_income = data.get("other_income", 0)
+    other_expense = data.get("other_expense", 0)
+    gross_profit = revenue - cogs
+    margin = round(gross_profit / revenue * 100, 1) if revenue else 0
+    net_income = revenue + other_income - cogs - overhead - other_expense
+
+    accounts = data.get("accounts", {})
+
+    # Group accounts by type
+    revenue_accounts = {}
+    cogs_accounts = {}
+    overhead_accounts = {}
+    other_accounts = {}
+    for acct, amt in sorted(accounts.items()):
+        if acct.startswith("4"):
+            revenue_accounts[acct] = round(amt, 2)
+        elif acct.startswith("5"):
+            cogs_accounts[acct] = round(amt, 2)
+        elif acct.startswith("6"):
+            overhead_accounts[acct] = round(amt, 2)
+        else:
+            other_accounts[acct] = round(amt, 2)
+
+    return {
+        "generated": datetime.now().isoformat(),
+        "month": month,
+        "summary": {
+            "revenue": round(revenue, 2),
+            "cogs": round(cogs, 2),
+            "gross_profit": round(gross_profit, 2),
+            "gross_margin": margin,
+            "overhead": round(overhead, 2),
+            "other_income": round(other_income, 2),
+            "other_expense": round(other_expense, 2),
+            "net_income": round(net_income, 2),
+        },
+        "accounts": {
+            "revenue": revenue_accounts,
+            "cogs": cogs_accounts,
+            "overhead": overhead_accounts,
+            "other": other_accounts,
+        },
+    }

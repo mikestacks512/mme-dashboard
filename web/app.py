@@ -22,9 +22,14 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from db.init_schema import init_schema
-from web.reports import get_leads, get_financial, get_estimates, get_sales, get_marketing, get_trends, get_cfo, DB_PATH, EXPORT_DIR
+from web.reports import (
+    get_leads, get_financial, get_estimates, get_sales, get_marketing,
+    get_trends, get_cfo, get_cancellations, get_pipeline, get_reviews,
+    get_claims, get_yoy, get_monthly_detail,
+    DB_PATH, EXPORT_DIR,
+)
 
-app = FastAPI(title="MME Dashboard", version="1.0")
+app = FastAPI(title="MME Dashboard", version="2.0")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -99,37 +104,60 @@ def api_sync_status():
     }
 
 
-# ── QB CSV upload ──
+# ── File uploads ──
 @app.post("/api/upload-pl")
 async def upload_pl(file: UploadFile = File(...)):
-    """Upload a QuickBooks Profit & Loss Detail CSV. Saved alongside existing files — newer uploads override overlapping months."""
+    """Upload a QuickBooks Profit & Loss Detail CSV."""
     if not file.filename.endswith(".csv"):
         return JSONResponse(status_code=400, content={"error": "File must be a CSV"})
-
     os.makedirs(EXPORT_DIR, exist_ok=True)
-    # Save with timestamp so multiple uploads coexist (newest wins for overlapping months)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     dest = os.path.join(EXPORT_DIR, f"profit_and_loss_upload_{ts}.csv")
     content = await file.read()
     with open(dest, "wb") as f:
         f.write(content)
+    return {"status": "ok", "message": f"Uploaded {file.filename} ({len(content):,} bytes). Updated months will override older data."}
 
-    return {"status": "ok", "message": f"Uploaded {file.filename} ({len(content):,} bytes). Data merged with existing P&L files — updated months will override older data.", "path": dest}
+
+@app.post("/api/upload-reviews")
+async def upload_reviews(file: UploadFile = File(...)):
+    """Upload a Google Reviews CSV. Format: date,rating,reviewer,text"""
+    if not file.filename.endswith(".csv"):
+        return JSONResponse(status_code=400, content={"error": "File must be a CSV"})
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    dest = os.path.join(EXPORT_DIR, "reviews.csv")
+    content = await file.read()
+    with open(dest, "wb") as f:
+        f.write(content)
+    return {"status": "ok", "message": f"Uploaded {file.filename} ({len(content):,} bytes)."}
+
+
+@app.post("/api/upload-claims")
+async def upload_claims(file: UploadFile = File(...)):
+    """Upload a Claims CSV. Format: date,customer,amount,description,status"""
+    if not file.filename.endswith(".csv"):
+        return JSONResponse(status_code=400, content={"error": "File must be a CSV"})
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    dest = os.path.join(EXPORT_DIR, "claims.csv")
+    content = await file.read()
+    with open(dest, "wb") as f:
+        f.write(content)
+    return {"status": "ok", "message": f"Uploaded {file.filename} ({len(content):,} bytes)."}
 
 
 @app.get("/api/data-status")
 def api_data_status():
-    """Check data freshness — when was QB CSV last uploaded, when was last sync."""
+    """Check data freshness."""
     import duckdb
-    result = {"qb_uploaded": None, "last_sync": None, "opp_count": 0}
+    result = {"qb_uploaded": None, "last_sync": None, "opp_count": 0,
+              "has_reviews": False, "has_claims": False}
 
-    # Check QB CSV
     pl_path = os.path.join(EXPORT_DIR, "mme_profit_and_loss_detail.csv")
     if os.path.exists(pl_path):
-        mtime = os.path.getmtime(pl_path)
-        result["qb_uploaded"] = datetime.fromtimestamp(mtime).isoformat()
+        result["qb_uploaded"] = datetime.fromtimestamp(os.path.getmtime(pl_path)).isoformat()
+    result["has_reviews"] = os.path.exists(os.path.join(EXPORT_DIR, "reviews.csv"))
+    result["has_claims"] = os.path.exists(os.path.join(EXPORT_DIR, "claims.csv"))
 
-    # Check DuckDB
     if os.path.exists(DB_PATH):
         try:
             con = duckdb.connect(DB_PATH, read_only=True)
@@ -147,22 +175,21 @@ def api_data_status():
     return result
 
 
+# ── Report endpoints ──
+
+def _safe(fn, label):
+    """Wrap a report function with error handling."""
+    try:
+        return fn()
+    except Exception as e:
+        return {"error": f"{label}: {e}"}
+
+
 @app.get("/api/overview")
 def api_overview():
-    """Pulls key metrics from financial, sales, marketing, and leads for the big picture."""
-    # Each sub-report may return {"error": "..."} — handle gracefully
-    try:
-        fin = get_financial()
-    except Exception:
-        fin = {"error": "Financial data unavailable"}
-    try:
-        sales = get_sales()
-    except Exception:
-        sales = {"error": "Sales data unavailable"}
-    try:
-        mkt = get_marketing()
-    except Exception:
-        mkt = {"error": "Marketing data unavailable"}
+    fin = _safe(get_financial, "Financial")
+    sales = _safe(get_sales, "Sales")
+    mkt = _safe(get_marketing, "Marketing")
 
     has_fin = "error" not in fin
     has_sales = "error" not in sales
@@ -206,58 +233,67 @@ def api_overview():
 
 @app.get("/api/leads")
 def api_leads():
-    try:
-        return get_leads()
-    except Exception as e:
-        return {"error": f"Leads unavailable: {e}"}
-
+    return _safe(get_leads, "Leads")
 
 @app.get("/api/financial")
 def api_financial():
-    try:
-        return get_financial()
-    except Exception as e:
-        return {"error": f"Financial data unavailable: {e}"}
-
+    return _safe(get_financial, "Financial")
 
 @app.get("/api/estimates")
 def api_estimates():
-    try:
-        return get_estimates()
-    except Exception as e:
-        return {"error": f"Estimates unavailable: {e}"}
-
+    return _safe(get_estimates, "Estimates")
 
 @app.get("/api/sales")
 def api_sales():
-    try:
-        return get_sales()
-    except Exception as e:
-        return {"error": f"Sales data unavailable: {e}"}
-
+    return _safe(get_sales, "Sales")
 
 @app.get("/api/marketing")
 def api_marketing():
-    try:
-        return get_marketing()
-    except Exception as e:
-        return {"error": f"Marketing data unavailable: {e}"}
-
+    return _safe(get_marketing, "Marketing")
 
 @app.get("/api/trends")
 def api_trends():
-    try:
-        return get_trends()
-    except Exception as e:
-        return {"error": f"Trends unavailable: {e}"}
-
+    return _safe(get_trends, "Trends")
 
 @app.get("/api/cfo")
 def api_cfo():
+    return _safe(get_cfo, "CFO")
+
+@app.get("/api/cancellations")
+def api_cancellations():
+    return _safe(get_cancellations, "Cancellations")
+
+@app.get("/api/pipeline")
+def api_pipeline():
+    return _safe(get_pipeline, "Pipeline")
+
+@app.get("/api/reviews")
+def api_reviews():
+    return _safe(get_reviews, "Reviews")
+
+@app.get("/api/claims")
+def api_claims():
+    return _safe(get_claims, "Claims")
+
+@app.get("/api/yoy")
+def api_yoy():
+    return _safe(get_yoy, "Year-over-Year")
+
+@app.get("/api/monthly/{month}")
+def api_monthly(month: str):
     try:
-        return get_cfo()
+        return get_monthly_detail(month)
     except Exception as e:
-        return {"error": f"CFO analysis unavailable: {e}"}
+        return {"error": f"Monthly detail: {e}"}
+
+@app.get("/api/callcenter")
+def api_callcenter():
+    try:
+        sys.path.insert(0, os.path.join(PROJECT_ROOT, "scripts"))
+        from dialpad_api import get_call_center_report
+        return get_call_center_report(days=90)
+    except Exception as e:
+        return {"error": f"Call center data unavailable: {e}"}
 
 
 # Static files mounted last so routes take priority
