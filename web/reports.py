@@ -1396,16 +1396,29 @@ def get_yoy():
     last_sync = _get_last_sync(con, "opportunities")
     con.close()
 
+    # Count cancelled/lost per year
+    cancel_lost = con.execute("""
+        SELECT
+            SUBSTR(CAST(service_date AS VARCHAR), 1, 4) as year,
+            SUM(CASE WHEN status = 30 THEN 1 ELSE 0 END) as cancelled,
+            SUM(CASE WHEN status = 20 THEN 1 ELSE 0 END) as lost
+        FROM opportunities WHERE service_date > 0
+        GROUP BY SUBSTR(CAST(service_date AS VARCHAR), 1, 4)
+    """).fetchall()
+    cl_map = {r[0]: (r[1], r[2]) for r in cancel_lost}
+
     # Build year summaries
-    years = []
+    year_summaries = []
     for y, total, booked, booked_rev, total_rev, avg_job in by_year:
         booking_rate = round(booked / total * 100, 1) if total else 0
-        years.append({
+        cx, lo = cl_map.get(y, (0, 0))
+        year_summaries.append({
             "year": y, "total_opps": total, "booked": booked,
             "booking_rate": booking_rate,
             "total_est_revenue": round(total_rev or 0, 2),
             "booked_revenue": round(booked_rev or 0, 2),
-            "avg_job_size": round(avg_job or 0, 2),
+            "avg_job": round(avg_job or 0, 2),
+            "cancelled": cx, "lost": lo,
         })
 
     # Build monthly comparison grouped by month number
@@ -1420,35 +1433,52 @@ def get_yoy():
 
     month_names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    # Build flat monthly comparison with year1/year2 fields
     monthly_comparison = []
     for mn in sorted(monthly_data.keys()):
-        entry = {"month": month_names[int(mn)] if mn.isdigit() and 1 <= int(mn) <= 12 else mn}
-        for y in year_list:
-            entry[y] = monthly_data[mn].get(y, None)
-        monthly_comparison.append(entry)
+        mn_int = int(mn) if mn.isdigit() else 0
+        label = month_names[mn_int] if 1 <= mn_int <= 12 else mn
+        y1_data = monthly_data[mn].get(year_list[0]) if len(year_list) > 0 else None
+        y2_data = monthly_data[mn].get(year_list[-1]) if len(year_list) > 1 else None
+        monthly_comparison.append({
+            "month_label": label,
+            "year1_opps": y1_data["opps"] if y1_data else None,
+            "year1_booked": y1_data["booked"] if y1_data else None,
+            "year1_rev": round(y1_data["booked_rev"], 2) if y1_data else None,
+            "year2_opps": y2_data["opps"] if y2_data else None,
+            "year2_booked": y2_data["booked"] if y2_data else None,
+            "year2_rev": round(y2_data["booked_rev"], 2) if y2_data else None,
+        })
 
-    # QB monthly data split by year
+    # QB financial YoY — flat list for easy table rendering
     qb_monthly = _load_qb_monthly()
-    qb_by_year = defaultdict(dict)
+    qb_year_totals = defaultdict(lambda: {"revenue": 0, "cogs": 0})
     for mk, data in qb_monthly.items():
         year = mk[:4]
-        month = mk[5:]
-        rev = data.get("revenue", 0)
-        cogs = data.get("cogs", 0)
-        gp = rev - cogs
-        margin = round(gp / rev * 100, 1) if rev else 0
-        qb_by_year[year][month] = {
-            "revenue": round(rev, 2), "cogs": round(cogs, 2),
-            "gross_profit": round(gp, 2), "margin": margin,
-        }
+        qb_year_totals[year]["revenue"] += data.get("revenue", 0)
+        qb_year_totals[year]["cogs"] += data.get("cogs", 0)
+
+    qb_by_year = []
+    for year in sorted(qb_year_totals.keys()):
+        d = qb_year_totals[year]
+        gp = d["revenue"] - d["cogs"]
+        margin = round(gp / d["revenue"] * 100, 1) if d["revenue"] else 0
+        qb_by_year.append({
+            "year": year,
+            "revenue": round(d["revenue"], 2),
+            "cogs": round(d["cogs"], 2),
+            "gross_profit": round(gp, 2),
+            "margin": margin,
+        })
 
     return {
         "generated": datetime.now().isoformat(),
         "last_sync": last_sync,
-        "years": years,
-        "year_list": year_list,
+        "by_year": year_summaries,
+        "years": year_list,
         "monthly_comparison": monthly_comparison,
-        "qb_by_year": dict(qb_by_year),
+        "qb_by_year": qb_by_year,
     }
 
 

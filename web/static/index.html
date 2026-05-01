@@ -1110,33 +1110,44 @@ const renderers = {
 
   /* ── CALL CENTER ── */
   callcenter(panel, d) {
-    let html = stampLine([`Last ${d.period_days} days`, `${d.total_calls.toLocaleString()} total calls`]);
+    let html = stampLine([`Last ${d.period_days} days`, `Spam filtered: ${(d.cancelled_spam || 0).toLocaleString()} excluded`]);
 
-    html += `<div class="question">Call Center Performance</div>
-      <div class="question-sub">Inbound call handling from Dialpad. Are we picking up the phone?</div>`;
+    html += `<div class="question">Are We Picking Up the Phone?</div>
+      <div class="question-sub">Real inbound calls only — spam and short-ring calls are filtered out.</div>`;
 
     html += `<div class="scorecards">`;
-    html += sc('Real Inbound', d.total_inbound.toLocaleString(),
-      `Excludes ${(d.cancelled_spam || 0).toLocaleString()} cancelled/spam calls. ${d.total_outbound.toLocaleString()} outbound.`, '');
     html += sc('Answer Rate', d.answer_rate + '%',
-      `${d.answered.toLocaleString()} answered, ${d.missed.toLocaleString()} missed, ${(d.abandoned || 0).toLocaleString()} abandoned.`,
+      `We're answering ${d.answer_rate}% of real inbound calls. ${d.answer_rate >= 85 ? 'Solid performance.' : d.answer_rate >= 70 ? 'Room for improvement.' : 'Too many calls going unanswered.'}`,
       d.answer_rate >= 85 ? 'OK' : d.answer_rate >= 70 ? 'WARN' : 'MISS');
-    html += sc('Missed Calls', d.missed.toLocaleString(),
-      `Real missed calls (not spam). After-hours: ${d.after_hours_missed.toLocaleString()}.`,
+    html += sc('Answered', d.answered.toLocaleString(),
+      `Out of ${d.total_inbound.toLocaleString()} real inbound calls.`, '');
+    html += sc('Missed', d.missed.toLocaleString(),
+      `${d.after_hours_missed.toLocaleString()} of these were after hours (before 8am or after 6pm).`,
       d.missed > d.answered ? 'MISS' : d.missed > d.answered * 0.3 ? 'WARN' : 'OK');
-    html += sc('Avg Call Duration', Math.round(d.avg_duration_seconds) + 's',
-      'Average talk time for answered inbound calls.', '');
-    html += sc('Filtered as Spam', (d.cancelled_spam || 0).toLocaleString(),
-      'Short-ring cancelled calls excluded from metrics.', '');
+    html += sc('After-Hours Missed', d.after_hours_missed.toLocaleString(),
+      `${d.total_inbound > 0 ? Math.round(d.after_hours_missed / d.missed * 100) : 0}% of all missed calls happen outside business hours. Consider after-hours answering service.`,
+      d.after_hours_missed > 100 ? 'WARN' : 'OK');
     html += `</div>`;
 
-    // Weekly trend
+    // Key insight
+    if (d.answer_rate < 70) {
+      html += `<div class="insight">
+        <div class="insight-label">Revenue at Risk</div>
+        You're missing <strong>${d.missed.toLocaleString()} calls</strong> over ${d.period_days} days.
+        If even 10% of those are potential customers at an average job of $1,500, that's
+        <strong>${fmt(Math.round(d.missed * 0.1 * 1500))}</strong> in lost revenue.
+        ${d.after_hours_missed > d.missed * 0.3 ? `<br><br><strong>${Math.round(d.after_hours_missed / d.missed * 100)}% of missed calls are after hours.</strong> An answering service or after-hours routing could capture these leads.` : ''}
+      </div>`;
+    }
+
+    // Weekly trend — simple and clean
     if (d.weekly_trend && d.weekly_trend.length) {
-      html += `<div class="question">Weekly Trend</div>`;
+      html += `<div class="question">Weekly Trend</div>
+        <div class="question-sub">Is call handling getting better or worse?</div>`;
       html += makeTable([
         {label: 'Week Of', key: 'week_of'},
-        {label: 'Inbound', key: 'inbound', align: 'right'},
-        {label: 'Answered', key: 'answered', align: 'right'},
+        {label: 'Calls In', key: 'inbound', align: 'right'},
+        {label: 'Picked Up', key: 'answered', align: 'right'},
         {label: 'Missed', key: 'missed', align: 'right'},
         {label: 'Answer Rate', align: 'right', render: r => {
           const c = r.answer_rate >= 85 ? 'var(--green)' : r.answer_rate >= 70 ? 'var(--yellow)' : 'var(--red)';
@@ -1145,29 +1156,13 @@ const renderers = {
       ], d.weekly_trend);
     }
 
-    // Hourly distribution
+    // Peak hours — only show business hours with high miss rates
     if (d.hourly_distribution && d.hourly_distribution.length) {
-      html += `<div class="question">When Are Calls Coming In?</div>
-        <div class="question-sub">Hourly breakdown helps you staff appropriately.</div>`;
-      html += makeTable([
-        {label: 'Hour', key: 'hour'},
-        {label: 'Inbound', key: 'inbound', align: 'right'},
-        {label: 'Answered', key: 'answered', align: 'right'},
-        {label: 'Missed', key: 'missed', align: 'right'},
-        {label: 'Answer Rate', align: 'right', render: r => r.answer_rate + '%'},
-      ], d.hourly_distribution);
-    }
-
-    // By target
-    if (d.by_target && d.by_target.length) {
-      html += `<div class="question">By Line / Call Center</div>`;
-      html += makeTable([
-        {label: 'Name', key: 'name'},
-        {label: 'Inbound', key: 'inbound', align: 'right'},
-        {label: 'Answered', key: 'answered', align: 'right'},
-        {label: 'Missed', key: 'missed', align: 'right'},
-        {label: 'Answer Rate', align: 'right', render: r => r.answer_rate + '%'},
-      ], d.by_target);
+      html += `<div class="question">When Are We Missing Calls?</div>
+        <div class="question-sub">Hours with the most missed calls — staff up here first.</div>`;
+      const sorted_hours = [...d.hourly_distribution].sort((a, b) => b.missed - a.missed);
+      const top_miss = sorted_hours.filter(h => h.missed > 0).slice(0, 8);
+      html += makeBars(top_miss, 'hour', 'missed', {color: 'red', fmt: v => v + ' missed'});
     }
 
     panel.innerHTML = html;
@@ -1274,64 +1269,67 @@ const renderers = {
 
   /* ── YEAR OVER YEAR ── */
   yoy(panel, d) {
-    let html = stampLine([`Updated ${new Date(d.generated).toLocaleString()}`]);
+    const yr1 = d.years && d.years.length > 0 ? d.years[0] : '2025';
+    const yr2 = d.years && d.years.length > 1 ? d.years[1] : '2026';
+    let html = stampLine([`Comparing ${yr1} vs ${yr2}`, `Updated ${new Date(d.generated).toLocaleString()}`]);
 
-    html += `<div class="question">Year-over-Year Comparison</div>
-      <div class="question-sub">How does this year compare to last year?</div>`;
+    html += `<div class="question">${yr1} vs ${yr2}: How Are We Doing?</div>
+      <div class="question-sub">Side-by-side comparison of sales performance and financial results.</div>`;
 
-    // Summary cards per year
+    // Year summary cards
     if (d.by_year && d.by_year.length) {
       html += `<div class="scorecards">`;
       d.by_year.forEach(y => {
-        html += sc(y.year + ' Opportunities', y.total_opps.toLocaleString(),
-          `Booked: ${y.booked} (${y.booking_rate}%) | Revenue: ${fmtK(y.booked_revenue)} | Avg: ${fmt(y.avg_job)}`, '');
+        html += sc(y.year, `${y.booked} booked of ${y.total_opps}`,
+          `Booking rate: ${y.booking_rate}% | Revenue: ${fmtK(y.booked_revenue)} | Avg job: ${fmt(y.avg_job)} | Cancelled: ${y.cancelled} | Lost: ${y.lost}`, '');
+      });
+      html += `</div>`;
+    }
+
+    // QB Financial comparison
+    if (d.qb_by_year && d.qb_by_year.length) {
+      html += `<div class="question">Revenue & Profit by Year</div>
+        <div class="question-sub">From QuickBooks P&L data.</div>`;
+
+      html += `<div class="scorecards">`;
+      d.qb_by_year.forEach(y => {
+        const status = y.margin >= 45 ? 'OK' : y.margin >= 35 ? 'WARN' : 'MISS';
+        html += sc(y.year + ' Revenue', fmtK(y.revenue),
+          `COGS: ${fmtK(y.cogs)} | Gross Profit: ${fmtK(y.gross_profit)} | Margin: ${y.margin}%`, status);
       });
       html += `</div>`;
 
-      // Table comparison
-      html += `<div class="section"><div class="section-title">Year Summary</div>`;
-      html += makeTable([
-        {label: 'Year', key: 'year'},
-        {label: 'Opportunities', key: 'total_opps', align: 'right'},
-        {label: 'Booked', key: 'booked', align: 'right'},
-        {label: 'Booking Rate', align: 'right', render: r => r.booking_rate + '%'},
-        {label: 'Revenue', align: 'right', render: r => `<strong>${fmtK(r.booked_revenue)}</strong>`},
-        {label: 'Avg Job', align: 'right', render: r => fmt(r.avg_job)},
-        {label: 'Cancelled', key: 'cancelled', align: 'right'},
-        {label: 'Lost', key: 'lost', align: 'right'},
-      ], d.by_year);
-      html += `</div>`;
+      // Show YoY change if we have two years
+      if (d.qb_by_year.length >= 2) {
+        const q1 = d.qb_by_year[0];
+        const q2 = d.qb_by_year[1];
+        // Annualize partial year for fair comparison
+        const q2_months = d.monthly_comparison ? d.monthly_comparison.filter(m => m.year2_opps != null).length : 0;
+        if (q2_months > 0 && q2_months < 12) {
+          const annualized = q2.revenue / q2_months * 12;
+          html += `<div class="insight">
+            <div class="insight-label">Projection</div>
+            ${yr2} has ${q2_months} months of data so far. At this pace, annualized revenue would be
+            <strong>${fmtK(annualized)}</strong> vs ${yr1}'s ${fmtK(q1.revenue)}.
+            That's a <strong>${annualized > q1.revenue ? '+' : ''}${Math.round((annualized / q1.revenue - 1) * 100)}% change</strong>.
+          </div>`;
+        }
+      }
     }
 
-    // Monthly comparison
+    // Monthly comparison table
     if (d.monthly_comparison && d.monthly_comparison.length) {
-      html += `<div class="question">Month-by-Month Comparison</div>`;
+      html += `<div class="question">Month-by-Month</div>
+        <div class="question-sub">Opportunities and bookings side by side.</div>`;
       html += makeTable([
         {label: 'Month', key: 'month_label'},
-        {label: d.years ? d.years[0] + ' Opps' : 'Yr1 Opps', align: 'right', render: r => r.year1_opps ?? '-'},
-        {label: d.years ? d.years[0] + ' Booked' : 'Yr1 Bkd', align: 'right', render: r => r.year1_booked ?? '-'},
-        {label: d.years ? d.years[1] + ' Opps' : 'Yr2 Opps', align: 'right', render: r => r.year2_opps ?? '-'},
-        {label: d.years ? d.years[1] + ' Booked' : 'Yr2 Bkd', align: 'right', render: r => r.year2_booked ?? '-'},
-        {label: 'Change', align: 'right', render: r => {
-          if (r.year1_opps == null || r.year2_opps == null) return '-';
-          const diff = r.year2_opps - r.year1_opps;
-          const c = diff >= 0 ? 'var(--green)' : 'var(--red)';
-          return `<span style="color:${c}">${diff >= 0 ? '+' : ''}${diff}</span>`;
-        }},
+        {label: yr1 + ' Opps', align: 'right', render: r => r.year1_opps != null ? r.year1_opps : '<span style="color:var(--text-dim)">-</span>'},
+        {label: yr1 + ' Booked', align: 'right', render: r => r.year1_booked != null ? r.year1_booked : '<span style="color:var(--text-dim)">-</span>'},
+        {label: yr1 + ' Rev', align: 'right', render: r => r.year1_rev != null ? fmt(r.year1_rev) : '<span style="color:var(--text-dim)">-</span>'},
+        {label: yr2 + ' Opps', align: 'right', render: r => r.year2_opps != null ? r.year2_opps : '<span style="color:var(--text-dim)">-</span>'},
+        {label: yr2 + ' Booked', align: 'right', render: r => r.year2_booked != null ? r.year2_booked : '<span style="color:var(--text-dim)">-</span>'},
+        {label: yr2 + ' Rev', align: 'right', render: r => r.year2_rev != null ? fmt(r.year2_rev) : '<span style="color:var(--text-dim)">-</span>'},
       ], d.monthly_comparison);
-    }
-
-    // QB financial YoY
-    if (d.qb_by_year && d.qb_by_year.length) {
-      html += `<div class="question">Financial Year-over-Year</div>
-        <div class="question-sub">Revenue and margins from QuickBooks data.</div>`;
-      html += makeTable([
-        {label: 'Year', key: 'year'},
-        {label: 'Revenue', align: 'right', render: r => `<strong>${fmtK(r.revenue)}</strong>`},
-        {label: 'COGS', align: 'right', render: r => fmtK(r.cogs)},
-        {label: 'Gross Profit', align: 'right', render: r => fmtK(r.gross_profit)},
-        {label: 'Margin', align: 'right', render: r => r.margin + '%'},
-      ], d.qb_by_year);
     }
 
     panel.innerHTML = html;
