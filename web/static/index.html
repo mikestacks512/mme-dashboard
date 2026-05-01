@@ -286,6 +286,31 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 .cfo-summary h2 { font-size: 11px; font-weight: 700; color: var(--accent-light); text-transform: uppercase; letter-spacing: 1.5px; }
 .cfo-summary .big-number { font-size: 36px; font-weight: 700; margin: 8px 0; }
 .cfo-summary p { font-size: 13px; color: var(--text-dim); }
+
+/* ── Power 10 Strip ── */
+.power10 {
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  gap: 8px; margin-bottom: 24px;
+  padding: 16px; background: linear-gradient(135deg, rgba(196,30,36,0.06) 0%, rgba(0,0,0,0) 100%);
+  border: 1px solid rgba(196,30,36,0.15); border-radius: 8px;
+}
+@media (max-width: 1100px) { .power10 { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 700px) { .power10 { grid-template-columns: repeat(2, 1fr); } }
+.p10-item {
+  text-align: center; padding: 10px 6px;
+  border-right: 1px solid var(--border);
+}
+.p10-item:last-child, .p10-item:nth-child(5n) { border-right: none; }
+.p10-label {
+  font-size: 9px; color: var(--text-dim); text-transform: uppercase;
+  letter-spacing: 1px; margin-bottom: 4px;
+}
+.p10-value { font-size: 22px; font-weight: 700; line-height: 1.1; }
+.p10-sub { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+.p10-value.good { color: var(--green); }
+.p10-value.warn { color: var(--yellow); }
+.p10-value.bad { color: var(--red); }
+.p10-value.neutral { color: var(--text); }
 </style>
 </head>
 <body>
@@ -531,9 +556,31 @@ const renderers = {
     const syncInfo = d.last_sync ? `Data synced ${syncAge(d.last_sync)}` : null;
     let html = stampLine([qbRange, oppRange, syncInfo]);
 
-    // ── THE BIG PICTURE ──
-    html += `<div class="question">The Big Picture</div>
-      <div class="question-sub">Key health metrics across revenue, profitability, sales, and marketing</div>`;
+    // ── POWER 10 — MORNING PULSE CHECK ──
+    html += `<div class="power10">`;
+    const p10v = (label, val, sub, cls) =>
+      `<div class="p10-item"><div class="p10-label">${label}</div><div class="p10-value ${cls}">${val}</div>${sub ? `<div class="p10-sub">${sub}</div>` : ''}</div>`;
+
+    html += p10v('Revenue', fin ? fmtK(fin.revenue) : '-', '', 'neutral');
+    html += p10v('Gross Margin', fin ? fin.gross_margin+'%' : '-', 'Target: 45%',
+      fin ? (fin.gross_margin >= 45 ? 'good' : fin.gross_margin >= 35 ? 'warn' : 'bad') : 'neutral');
+    html += p10v('Contribution', fin && fin.contribution_profit ? fmtK(fin.contribution_profit) : '-',
+      fin && fin.contribution_margin ? fin.contribution_margin+'% margin' : '',
+      fin && fin.contribution_margin ? (fin.contribution_margin >= 55 ? 'good' : fin.contribution_margin >= 45 ? 'warn' : 'bad') : 'neutral');
+    html += p10v('Net Profit', fin ? fmtK(fin.fully_loaded_profit) : '-', fin ? fin.ebitda_margin+'%' : '',
+      fin ? (fin.ebitda_margin >= 20 ? 'good' : fin.ebitda_margin >= 10 ? 'warn' : 'bad') : 'neutral');
+    html += p10v('Booking Rate', s.total_opps > 0 ? s.booking_rate+'%' : '-', 'Target: 25%',
+      s.total_opps > 0 ? (s.booking_rate >= 25 ? 'good' : s.booking_rate >= 15 ? 'warn' : 'bad') : 'neutral');
+    const laborItem = (d.cost_control || []).find(c => c.category === 'Labor (Direct)');
+    html += p10v('Labor %', laborItem ? laborItem.pct+'%' : '-', 'Target: \u226434%',
+      laborItem ? (laborItem.pct <= 34 ? 'good' : laborItem.pct <= 38 ? 'warn' : 'bad') : 'neutral');
+    html += p10v('Mktg ROI', m.efficiency ? m.efficiency.roi+'x' : '-', '',
+      m.efficiency ? (m.efficiency.roi >= 10 ? 'good' : m.efficiency.roi >= 5 ? 'warn' : 'bad') : 'neutral');
+    html += p10v('Cost/Lead', m.efficiency ? fmt(m.efficiency.cost_per_lead) : '-', '', 'neutral');
+    html += p10v('Booked Rev', s.revenue > 0 ? fmtK(s.revenue) : '-', '', 'neutral');
+    html += p10v('Contractor', d.labor_split ? d.labor_split.contractor_pct+'%' : '-', '',
+      d.labor_split ? (d.labor_split.contractor_pct <= 50 ? 'good' : d.labor_split.contractor_pct <= 70 ? 'warn' : 'bad') : 'neutral');
+    html += `</div>`;
 
     // Show setup guidance if data is missing
     const ds = d.data_status || {};
@@ -544,34 +591,33 @@ const renderers = {
         1. Upload your QuickBooks P&L Detail CSV (for financial data)<br>
         2. Sync SmartMoving data (for sales, marketing, and pricing data)
       </div>`;
-    } else if (!ds.has_financial) {
-      html += `<div class="insight" style="margin-bottom:24px">
-        <div class="insight-label">QuickBooks Data Missing</div>
-        Upload your P&L Detail CSV on the <strong>Data Management</strong> tab to see financial metrics.
-      </div>`;
     }
+
+    // ── PROFITABILITY ──
+    html += `<div class="question">Profitability</div>
+      <div class="question-sub">Two views: Contribution Profit (what each job earns) and Fully Loaded (after all overhead)</div>`;
 
     html += `<div class="scorecards">`;
     if (fin) {
-      html += sc('Total Revenue', fmtK(fin.revenue),
-        `What customers have paid over the reporting period`, '');
-      html += sc('Gross Margin', fin.gross_margin + '%',
-        `Every dollar of revenue keeps ${fin.gross_margin}\u00a2 after direct job costs (labor, fuel, materials). Target is 45%.`,
-        fin.gross_margin_status);
-      html += sc('Bottom Line Profit', fmtK(fin.fully_loaded_profit),
-        `What's left after ALL expenses. That's a ${fin.ebitda_margin}% net margin (target: 20%).`,
+      html += sc('Revenue', fmtK(fin.revenue), 'Total income from all jobs and services.', '');
+      html += sc('Contribution Profit', fmtK(fin.contribution_profit),
+        `Revenue minus direct job costs only (labor, fuel, materials, merchant fees). ${fin.contribution_margin}% margin. This is what the jobs actually earn.`,
+        fin.contribution_status);
+      html += sc('Fully Loaded Profit', fmtK(fin.fully_loaded_profit),
+        `After ALL expenses (marketing, admin, insurance, rent). ${fin.ebitda_margin}% net margin. Target: 20%.`,
         fin.ebitda_status);
+      html += sc('Gross Margin', fin.gross_margin + '%',
+        `Target: 45%. Every point below costs ${fmtK(fin.revenue / 100)}/year.`,
+        fin.gross_margin_status);
     }
     if (s.total_opps > 0) {
       html += sc('Booking Rate', s.booking_rate + '%',
-        `${s.total_booked.toLocaleString()} of ${s.total_opps.toLocaleString()} opportunities turned into paying jobs. Target is 25%.`,
+        `${s.total_booked.toLocaleString()} of ${s.total_opps.toLocaleString()} opportunities became jobs.`,
         s.booking_rate_status);
-      html += sc('Booked Revenue', fmtK(s.revenue),
-        `Total estimated revenue from jobs that are booked, confirmed, or completed.`, '');
     }
     if (m.efficiency) {
       html += sc('Marketing ROI', m.efficiency.roi + 'x',
-        `Every $1 spent on marketing generated $${m.efficiency.roi} in booked revenue.`,
+        `$1 spent = $${m.efficiency.roi} revenue. CAC: ${fmt(m.efficiency.cac)}.`,
         m.efficiency.roi >= 10 ? 'OK' : m.efficiency.roi >= 5 ? 'WARN' : 'MISS');
     }
     html += `</div>`;
@@ -700,13 +746,14 @@ const renderers = {
     html += `<div class="scorecards">`;
     html += sc('Revenue', fmtK(p.revenue), 'Total income from all moving jobs and services.', '');
     html += sc('Gross Margin', p.gross_margin + '%',
-      `For every $100 earned, $${(100 - p.gross_margin).toFixed(0)} goes to direct job costs (crew labor, fuel, materials, truck costs) and $${p.gross_margin.toFixed(0)} is left over. Target: 45%.`,
+      `For every $100 earned, $${(100 - p.gross_margin).toFixed(0)} goes to direct job costs. Target: 45%.`,
       p.gross_margin_status);
-    html += sc('Net Margin', p.ebitda_margin + '%',
-      `After paying for EVERYTHING (office, marketing, insurance, admin), ${p.ebitda_margin}% of revenue is actual profit. Target: 20%.`,
+    html += sc('Contribution Profit', fmtK(p.contribution_profit),
+      `Revenue minus direct job costs only (labor, fuel, materials, merchant fees). This is what jobs actually earn before overhead. ${p.contribution_margin}% margin.`,
+      p.contribution_status);
+    html += sc('Fully Loaded Profit', fmtK(p.fully_loaded_profit),
+      `After ALL expenses. ${p.ebitda_margin}% net margin (target: 20%). Net income: ${fmtK(p.net_income)}.`,
       p.ebitda_status);
-    html += sc('Net Profit', fmtK(p.fully_loaded_profit),
-      `Cash left after every single expense. Net income including other items: ${fmtK(p.net_income)}.`, '');
     html += `</div>`;
 
     // Cost control
@@ -1125,9 +1172,21 @@ const renderers = {
       `${d.after_hours_missed.toLocaleString()} of these were after hours (before 8am or after 6pm).`,
       d.missed > d.answered ? 'MISS' : d.missed > d.answered * 0.3 ? 'WARN' : 'OK');
     html += sc('After-Hours Missed', d.after_hours_missed.toLocaleString(),
-      `${d.total_inbound > 0 ? Math.round(d.after_hours_missed / d.missed * 100) : 0}% of all missed calls happen outside business hours. Consider after-hours answering service.`,
+      `${d.total_inbound > 0 && d.missed > 0 ? Math.round(d.after_hours_missed / d.missed * 100) : 0}% of all missed calls happen outside business hours. Consider after-hours answering service.`,
       d.after_hours_missed > 100 ? 'WARN' : 'OK');
+    html += sc('Speed to Answer', (d.avg_speed_to_answer || 0) + 's',
+      `Average ring time before pickup. ${(d.avg_speed_to_answer || 0) <= 15 ? 'Fast.' : (d.avg_speed_to_answer || 0) <= 30 ? 'OK but could improve.' : 'Leads go cold after 30s.'}`,
+      (d.avg_speed_to_answer || 999) <= 15 ? 'OK' : (d.avg_speed_to_answer || 999) <= 30 ? 'WARN' : 'MISS');
+    html += sc('Avg Talk Time', Math.round(d.avg_talk_duration || 0) + 's',
+      'Average conversation length for answered calls.', '');
     html += `</div>`;
+
+    // Speed distribution
+    if (d.speed_distribution && d.speed_distribution.length) {
+      html += `<div class="question">How Fast Are We Picking Up?</div>
+        <div class="question-sub">Under 10 seconds is elite. Over 60 seconds loses leads.</div>`;
+      html += makeBars(d.speed_distribution, 'bucket', 'pct', {color: 'green', fmt: v => v + '%'});
+    }
 
     // Key insight
     if (d.answer_rate < 70) {

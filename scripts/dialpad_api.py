@@ -211,6 +211,76 @@ def get_call_center_report(days=90):
             "answer_rate": rate,
         })
 
+    # Speed to answer — ringing_duration for answered ("incoming") calls
+    def _parse_duration(val):
+        """Parse a duration string to float, returning None on failure."""
+        if not val or not val.strip():
+            return None
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+
+    ring_times = []
+    for r in answered:
+        rt = _parse_duration(r.get("ringing_duration", ""))
+        if rt is not None:
+            ring_times.append(rt)
+
+    avg_speed_to_answer = round(sum(ring_times) / len(ring_times), 1) if ring_times else 0
+
+    # Speed distribution buckets
+    buckets = [
+        ("Under 10s", 0, 10),
+        ("10-30s", 10, 30),
+        ("30-60s", 30, 60),
+        ("1-2 min", 60, 120),
+        ("Over 2 min", 120, float("inf")),
+    ]
+    bucket_counts = {label: 0 for label, _, _ in buckets}
+    for rt in ring_times:
+        for label, lo, hi in buckets:
+            if lo <= rt < hi:
+                bucket_counts[label] += 1
+                break
+
+    total_ring = len(ring_times)
+    speed_distribution = []
+    for label, _, _ in buckets:
+        pct = round(bucket_counts[label] / total_ring * 100, 1) if total_ring else 0
+        speed_distribution.append({
+            "bucket": label,
+            "count": bucket_counts[label],
+            "pct": pct,
+        })
+
+    # Average talk duration for answered calls
+    talk_times = []
+    for r in answered:
+        tt = _parse_duration(r.get("talk_duration", ""))
+        if tt is not None:
+            talk_times.append(tt)
+    avg_talk_duration = round(sum(talk_times) / len(talk_times), 1) if talk_times else 0
+
+    # Speed to answer by hour of day
+    hourly_speed = defaultdict(list)
+    for r in answered:
+        ds = r.get("date_started", "")
+        if len(ds) >= 13:
+            hour = ds[11:13]
+            rt = _parse_duration(r.get("ringing_duration", ""))
+            if rt is not None:
+                hourly_speed[hour].append(rt)
+
+    speed_by_hour = []
+    for hour in sorted(hourly_speed.keys()):
+        vals = hourly_speed[hour]
+        speed_by_hour.append({
+            "hour": f"{hour}:00",
+            "avg_speed_to_answer": round(sum(vals) / len(vals), 1),
+            "call_count": len(vals),
+        })
+
     # After-hours calls (before 8am or after 6pm)
     after_hours_missed = 0
     for r in missed:
@@ -259,6 +329,10 @@ def get_call_center_report(days=90):
         "cancelled_spam": cancelled_count,
         "answer_rate": answer_rate,
         "avg_duration_seconds": avg_duration,
+        "avg_speed_to_answer": avg_speed_to_answer,
+        "speed_distribution": speed_distribution,
+        "avg_talk_duration": avg_talk_duration,
+        "speed_by_hour": speed_by_hour,
         "after_hours_missed": after_hours_missed,
         "daily_trend": daily_trend[-30:],
         "weekly_trend": weekly_trend,

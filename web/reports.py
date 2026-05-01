@@ -308,6 +308,11 @@ def get_financial():
     contractor_ratio = (labor_contracted / (labor_w2 + labor_contracted) * 100
                         if (labor_w2 + labor_contracted) > 0 else 0)
 
+    # Contribution Profit (per the spec): Revenue minus direct job costs only
+    direct_costs = labor_direct + materials + fuel + merchant + claims + truck_lease
+    contribution_profit = revenue - direct_costs
+    contribution_margin = (contribution_profit / revenue * 100) if revenue else 0
+
     def _status(actual, target, direction):
         if direction == "<=" and actual <= target:
             return "OK"
@@ -350,6 +355,9 @@ def get_financial():
             "gross_margin": round(gm, 1),
             "gross_margin_target": 45,
             "gross_margin_status": _status(gm, 45, ">="),
+            "contribution_profit": round(contribution_profit, 2),
+            "contribution_margin": round(contribution_margin, 1),
+            "contribution_status": _status(contribution_margin, 55, ">="),
             "overhead": round(overhead, 2),
             "overhead_pct": round(overhead / revenue * 100, 1),
             "fully_loaded_profit": round(fully_loaded, 2),
@@ -380,15 +388,18 @@ def get_financial():
         "waterfall": [
             {"label": "Revenue", "amount": round(revenue, 2)},
             {"label": "Direct Labor", "amount": round(-labor_direct, 2)},
-            {"label": "Sales Labor", "amount": round(-sales_labor, 2)},
-            {"label": "Materials/Fuel/Fees", "amount": round(-(materials + fuel + merchant), 2)},
+            {"label": "Packing Materials", "amount": round(-materials, 2)},
+            {"label": "Fuel", "amount": round(-fuel, 2)},
+            {"label": "Merchant Fees", "amount": round(-merchant, 2)},
             {"label": "Truck Lease/Rent", "amount": round(-truck_lease, 2)},
             {"label": "Claims/Damages", "amount": round(-claims, 2)},
-            {"label": "= Gross Profit", "amount": round(gross_profit, 2), "subtotal": True},
+            {"label": "= Contribution Profit", "amount": round(contribution_profit, 2), "subtotal": True},
+            {"label": "Sales Labor", "amount": round(-sales_labor, 2)},
             {"label": "Marketing", "amount": round(-marketing, 2)},
             {"label": "Insurance", "amount": round(-insurance, 2)},
             {"label": "Admin Payroll", "amount": round(-admin_payroll, 2)},
             {"label": "Other Overhead", "amount": round(-(overhead - marketing - insurance - admin_payroll), 2)},
+            {"label": "Other COGS", "amount": round(-(cogs - direct_costs - sales_labor), 2)},
             {"label": "= Fully Loaded Profit", "amount": round(fully_loaded, 2), "subtotal": True},
         ],
         "monthly_trend": monthly_trend,
