@@ -485,6 +485,22 @@ const renderers = {
     html += `<div class="question">The Big Picture</div>
       <div class="question-sub">Key health metrics across revenue, profitability, sales, and marketing</div>`;
 
+    // Show setup guidance if data is missing
+    const ds = d.data_status || {};
+    if (!ds.has_financial && !ds.has_sales) {
+      html += `<div class="insight" style="margin-bottom:24px">
+        <div class="insight-label">Getting Started</div>
+        <strong>No data loaded yet.</strong> Go to the <strong>Data Management</strong> tab to:<br>
+        1. Upload your QuickBooks P&L Detail CSV (for financial data)<br>
+        2. Sync SmartMoving data (for sales, marketing, and pricing data)
+      </div>`;
+    } else if (!ds.has_financial) {
+      html += `<div class="insight" style="margin-bottom:24px">
+        <div class="insight-label">QuickBooks Data Missing</div>
+        Upload your P&L Detail CSV on the <strong>Data Management</strong> tab to see financial metrics.
+      </div>`;
+    }
+
     html += `<div class="scorecards">`;
     if (fin) {
       html += sc('Total Revenue', fmtK(fin.revenue),
@@ -496,11 +512,13 @@ const renderers = {
         `What's left after ALL expenses. That's a ${fin.ebitda_margin}% net margin (target: 20%).`,
         fin.ebitda_status);
     }
-    html += sc('Booking Rate', s.booking_rate + '%',
-      `${s.total_booked.toLocaleString()} of ${s.total_opps.toLocaleString()} opportunities turned into paying jobs. Target is 25%.`,
-      s.booking_rate_status);
-    html += sc('Booked Revenue', fmtK(s.revenue),
-      `Total estimated revenue from jobs that are booked, confirmed, or completed.`, '');
+    if (s.total_opps > 0) {
+      html += sc('Booking Rate', s.booking_rate + '%',
+        `${s.total_booked.toLocaleString()} of ${s.total_opps.toLocaleString()} opportunities turned into paying jobs. Target is 25%.`,
+        s.booking_rate_status);
+      html += sc('Booked Revenue', fmtK(s.revenue),
+        `Total estimated revenue from jobs that are booked, confirmed, or completed.`, '');
+    }
     if (m.efficiency) {
       html += sc('Marketing ROI', m.efficiency.roi + 'x',
         `Every $1 spent on marketing generated $${m.efficiency.roi} in booked revenue.`,

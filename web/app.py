@@ -136,71 +136,114 @@ def api_data_status():
 @app.get("/api/overview")
 def api_overview():
     """Pulls key metrics from financial, sales, marketing, and leads for the big picture."""
-    fin = get_financial()
-    sales = get_sales()
-    mkt = get_marketing()
+    # Each sub-report may return {"error": "..."} — handle gracefully
+    try:
+        fin = get_financial()
+    except Exception:
+        fin = {"error": "Financial data unavailable"}
+    try:
+        sales = get_sales()
+    except Exception:
+        sales = {"error": "Sales data unavailable"}
+    try:
+        mkt = get_marketing()
+    except Exception:
+        mkt = {"error": "Marketing data unavailable"}
+
+    has_fin = "error" not in fin
+    has_sales = "error" not in sales
+    has_mkt = "error" not in mkt
+
     return {
         "generated": datetime.now().isoformat(),
-        "qb_date_range_start": fin.get("date_range_start"),
-        "qb_date_range_end": fin.get("date_range_end"),
-        "opp_date_range_start": sales.get("date_range_start"),
-        "opp_date_range_end": sales.get("date_range_end"),
-        "last_sync": sales.get("last_sync"),
-        "financial": fin.get("profitability") if "profitability" in fin else None,
-        "financial_trend": fin.get("monthly_trend", [])[-3:] if "monthly_trend" in fin else [],
-        "cost_control": fin.get("cost_control", []),
-        "labor_split": fin.get("labor_split"),
+        "qb_date_range_start": fin.get("date_range_start") if has_fin else None,
+        "qb_date_range_end": fin.get("date_range_end") if has_fin else None,
+        "opp_date_range_start": sales.get("date_range_start") if has_sales else None,
+        "opp_date_range_end": sales.get("date_range_end") if has_sales else None,
+        "last_sync": sales.get("last_sync") if has_sales else None,
+        "financial": fin.get("profitability") if has_fin else None,
+        "financial_trend": fin.get("monthly_trend", [])[-3:] if has_fin else [],
+        "cost_control": fin.get("cost_control", []) if has_fin else [],
+        "labor_split": fin.get("labor_split") if has_fin else None,
         "sales": {
-            "total_opps": sales.get("totals", {}).get("opps", 0),
-            "total_booked": sales.get("totals", {}).get("booked", 0),
-            "booking_rate": sales.get("overall_booking_rate", 0),
-            "booking_rate_status": sales.get("booking_rate_status", ""),
-            "revenue": sales.get("totals", {}).get("revenue", 0),
-            "top_reps": sales.get("by_rep", [])[:5],
-            "pipeline": sales.get("pipeline", []),
+            "total_opps": sales.get("totals", {}).get("opps", 0) if has_sales else 0,
+            "total_booked": sales.get("totals", {}).get("booked", 0) if has_sales else 0,
+            "booking_rate": sales.get("overall_booking_rate", 0) if has_sales else 0,
+            "booking_rate_status": sales.get("booking_rate_status", "") if has_sales else "",
+            "revenue": sales.get("totals", {}).get("revenue", 0) if has_sales else 0,
+            "top_reps": sales.get("by_rep", [])[:5] if has_sales else [],
+            "pipeline": sales.get("pipeline", []) if has_sales else [],
         },
         "marketing": {
-            "spend": mkt.get("marketing_spend", 0),
-            "total_revenue": mkt.get("total_revenue", 0),
-            "efficiency": mkt.get("efficiency"),
-            "top_channels": (mkt.get("channels") or [])[:5],
+            "spend": mkt.get("marketing_spend", 0) if has_mkt else 0,
+            "total_revenue": mkt.get("total_revenue", 0) if has_mkt else 0,
+            "efficiency": mkt.get("efficiency") if has_mkt else None,
+            "top_channels": (mkt.get("channels") or [])[:5] if has_mkt else [],
+        },
+        "data_status": {
+            "has_financial": has_fin,
+            "has_sales": has_sales,
+            "has_marketing": has_mkt,
+            "financial_error": fin.get("error") if not has_fin else None,
+            "sales_error": sales.get("error") if not has_sales else None,
         },
     }
 
 
 @app.get("/api/leads")
 def api_leads():
-    return get_leads()
+    try:
+        return get_leads()
+    except Exception as e:
+        return {"error": f"Leads unavailable: {e}"}
 
 
 @app.get("/api/financial")
 def api_financial():
-    return get_financial()
+    try:
+        return get_financial()
+    except Exception as e:
+        return {"error": f"Financial data unavailable: {e}"}
 
 
 @app.get("/api/estimates")
 def api_estimates():
-    return get_estimates()
+    try:
+        return get_estimates()
+    except Exception as e:
+        return {"error": f"Estimates unavailable: {e}"}
 
 
 @app.get("/api/sales")
 def api_sales():
-    return get_sales()
+    try:
+        return get_sales()
+    except Exception as e:
+        return {"error": f"Sales data unavailable: {e}"}
 
 
 @app.get("/api/marketing")
 def api_marketing():
-    return get_marketing()
+    try:
+        return get_marketing()
+    except Exception as e:
+        return {"error": f"Marketing data unavailable: {e}"}
 
 
 @app.get("/api/trends")
 def api_trends():
-    return get_trends()
+    try:
+        return get_trends()
+    except Exception as e:
+        return {"error": f"Trends unavailable: {e}"}
 
 
 @app.get("/api/cfo")
 def api_cfo():
-    return get_cfo()
+    try:
+        return get_cfo()
+    except Exception as e:
+        return {"error": f"CFO analysis unavailable: {e}"}
 
 
 # Static files mounted last so routes take priority
