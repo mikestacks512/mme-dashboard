@@ -238,6 +238,7 @@ tr:hover td { background: #fafafa; }
   <div class="tab" data-tab="marketing">Marketing ROI</div>
   <div class="tab" data-tab="estimates">Pricing & Estimates</div>
   <div class="tab" data-tab="trends">Trends</div>
+  <div class="tab" data-tab="data" style="margin-left:auto; color:var(--text-dim);">Data Management</div>
 </div>
 
 <div class="content">
@@ -248,6 +249,7 @@ tr:hover td { background: #fafafa; }
   <div class="panel" id="panel-marketing"><div class="loading">Loading marketing data...</div></div>
   <div class="panel" id="panel-estimates"><div class="loading">Loading estimates...</div></div>
   <div class="panel" id="panel-trends"><div class="loading">Loading trends...</div></div>
+  <div class="panel" id="panel-data"></div>
 </div>
 
 <script>
@@ -321,6 +323,8 @@ function refreshCurrent() {
 
 async function loadTab(name) {
   const panel = $(`#panel-${name}`);
+  // Data management tab doesn't need an API call
+  if (name === 'data') { cache[name] = true; renderers[name](panel); return; }
   try {
     const resp = await fetch(`/api/${name}`);
     const data = await resp.json();
@@ -838,7 +842,126 @@ const renderers = {
     panel.innerHTML = html;
   },
 
+
+  /* ── DATA MANAGEMENT ── */
+  data(panel) {
+    let html = `<div class="question">Data Management</div>
+      <div class="question-sub">Sync SmartMoving data and upload QuickBooks reports to populate the dashboard.</div>`;
+
+    // SmartMoving Sync
+    html += `<div class="scorecard" style="margin-bottom:20px">
+      <div class="sc-label">SMARTMOVING DATA SYNC</div>
+      <p style="font-size:13px;color:var(--text-dim);margin-bottom:12px">
+        Pulls all customers and opportunities from SmartMoving API into the database.
+        This takes 30-60 minutes for a full sync.
+      </p>
+      <button id="sync-btn" onclick="startSync()" style="
+        padding:10px 24px; background:var(--accent); color:#fff; border:none;
+        border-radius:8px; font-size:14px; font-weight:600; cursor:pointer;
+      ">Sync SmartMoving Data</button>
+      <div id="sync-status" style="margin-top:12px;font-size:13px;color:var(--text-dim)"></div>
+    </div>`;
+
+    // QB Upload
+    html += `<div class="scorecard" style="margin-bottom:20px">
+      <div class="sc-label">QUICKBOOKS P&L UPLOAD</div>
+      <p style="font-size:13px;color:var(--text-dim);margin-bottom:12px">
+        Upload your QuickBooks Profit & Loss Detail CSV to populate financial data.
+        Export it from QuickBooks: Reports > Profit and Loss Detail > Export as CSV.
+      </p>
+      <input type="file" id="pl-file" accept=".csv" style="margin-bottom:8px;font-size:13px">
+      <br>
+      <button onclick="uploadPL()" style="
+        padding:10px 24px; background:var(--accent); color:#fff; border:none;
+        border-radius:8px; font-size:14px; font-weight:600; cursor:pointer;
+      ">Upload P&L CSV</button>
+      <div id="upload-status" style="margin-top:12px;font-size:13px;color:var(--text-dim)"></div>
+    </div>`;
+
+    panel.innerHTML = html;
+  },
+
 };
+
+
+/* ── Data Management Functions ── */
+async function startSync() {
+  const btn = document.getElementById('sync-btn');
+  const status = document.getElementById('sync-status');
+  btn.disabled = true;
+  btn.textContent = 'Starting sync...';
+  status.innerHTML = '';
+
+  try {
+    const resp = await fetch('/api/sync', {method: 'POST'});
+    const data = await resp.json();
+    if (data.status === 'already_running') {
+      status.innerHTML = '<span style="color:var(--yellow)">Sync already in progress...</span>';
+    } else {
+      status.innerHTML = '<span style="color:var(--green)">Sync started! This will take 30-60 minutes.</span>';
+    }
+    btn.textContent = 'Sync Running...';
+    // Poll for completion
+    pollSync();
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--red)">Error: ${e.message}</span>`;
+    btn.disabled = false;
+    btn.textContent = 'Sync SmartMoving Data';
+  }
+}
+
+async function pollSync() {
+  const btn = document.getElementById('sync-btn');
+  const status = document.getElementById('sync-status');
+  const check = async () => {
+    try {
+      const resp = await fetch('/api/sync/status');
+      const data = await resp.json();
+      if (data.running) {
+        status.innerHTML = '<span style="color:var(--yellow)">Sync in progress... (this page will update when complete)</span>';
+        setTimeout(check, 15000);
+      } else if (data.last_result) {
+        if (data.last_result.status === 'success') {
+          status.innerHTML = `<span style="color:var(--green)">Sync completed at ${new Date(data.last_result.completed).toLocaleString()}. Refresh other tabs to see new data.</span>`;
+        } else {
+          status.innerHTML = `<span style="color:var(--red)">Sync failed: ${data.last_result.error}</span>`;
+        }
+        btn.disabled = false;
+        btn.textContent = 'Sync SmartMoving Data';
+        cache = {}; // Clear cache so tabs reload
+      }
+    } catch(e) {
+      setTimeout(check, 15000);
+    }
+  };
+  setTimeout(check, 10000);
+}
+
+async function uploadPL() {
+  const fileInput = document.getElementById('pl-file');
+  const status = document.getElementById('upload-status');
+
+  if (!fileInput.files.length) {
+    status.innerHTML = '<span style="color:var(--red)">Please select a CSV file first.</span>';
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+
+  try {
+    const resp = await fetch('/api/upload-pl', {method: 'POST', body: formData});
+    const data = await resp.json();
+    if (data.error) {
+      status.innerHTML = `<span style="color:var(--red)">${data.error}</span>`;
+    } else {
+      status.innerHTML = `<span style="color:var(--green)">${data.message}. Refresh Financial and Overview tabs to see the data.</span>`;
+      cache = {}; // Clear cache
+    }
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--red)">Upload failed: ${e.message}</span>`;
+  }
+}
 
 // Load the first tab on page load
 loadTab('overview');

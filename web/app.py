@@ -9,22 +9,37 @@ Usage:
 import os
 import sys
 import argparse
+import threading
 from datetime import datetime
 
 # Ensure project root is on the path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
-from web.reports import get_leads, get_financial, get_estimates, get_sales, get_marketing, get_trends, get_cfo
+from db.init_schema import init_schema
+from web.reports import get_leads, get_financial, get_estimates, get_sales, get_marketing, get_trends, get_cfo, DB_PATH, EXPORT_DIR
 
 app = FastAPI(title="MME Dashboard", version="1.0")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+# Track sync status
+sync_status = {"running": False, "last_result": None}
+
+
+# ── Auto-init DB on startup ──
+@app.on_event("startup")
+def startup_init():
+    """Create DuckDB and schema if they don't exist."""
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    init_schema(DB_PATH)
+    print(f"  DB ready: {DB_PATH}")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -37,6 +52,55 @@ def index():
 @app.get("/api/health")
 def health():
     return {"status": "ok", "time": datetime.now().isoformat()}
+
+
+# ── Data sync trigger ──
+@app.post("/api/sync")
+def api_sync():
+    """Trigger a SmartMoving data sync in the background."""
+    if sync_status["running"]:
+        return {"status": "already_running", "message": "Sync is already in progress."}
+
+    def run_sync():
+        sync_status["running"] = True
+        sync_status["last_result"] = None
+        try:
+            sys.path.insert(0, os.path.join(PROJECT_ROOT, "scripts"))
+            from fast_sync import main as sync_main
+            sync_main()
+            sync_status["last_result"] = {"status": "success", "completed": datetime.now().isoformat()}
+        except Exception as e:
+            sync_status["last_result"] = {"status": "error", "error": str(e), "completed": datetime.now().isoformat()}
+        finally:
+            sync_status["running"] = False
+
+    thread = threading.Thread(target=run_sync, daemon=True)
+    thread.start()
+    return {"status": "started", "message": "Sync started in background. Check /api/sync/status for progress."}
+
+
+@app.get("/api/sync/status")
+def api_sync_status():
+    return {
+        "running": sync_status["running"],
+        "last_result": sync_status["last_result"],
+    }
+
+
+# ── QB CSV upload ──
+@app.post("/api/upload-pl")
+async def upload_pl(file: UploadFile = File(...)):
+    """Upload a QuickBooks Profit & Loss Detail CSV."""
+    if not file.filename.endswith(".csv"):
+        return JSONResponse(status_code=400, content={"error": "File must be a CSV"})
+
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    dest = os.path.join(EXPORT_DIR, "mme_profit_and_loss_detail.csv")
+    content = await file.read()
+    with open(dest, "wb") as f:
+        f.write(content)
+
+    return {"status": "ok", "message": f"Uploaded {file.filename} ({len(content):,} bytes)", "path": dest}
 
 
 @app.get("/api/overview")
