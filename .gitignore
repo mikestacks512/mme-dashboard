@@ -2,13 +2,16 @@
 .env
 *.env
 
-# Financial data files (sensitive)
+# Financial data files in root (sensitive)
 Muscleman Elite*
-*.csv
+/jobs.csv
+/leads.csv
+/opportunities.csv
 *.zip
-jobs.csv
-leads.csv
-opportunities.csv
+
+# Exports - only keep P&L detail, exclude the rest
+exports/*
+!exports/mme_profit_and_loss_detail.csv
 
 # Zone identifiers (Windows)
 *:Zone.Identifier

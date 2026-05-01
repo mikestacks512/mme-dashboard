@@ -35,11 +35,23 @@ sync_status = {"running": False, "last_result": None}
 # ── Auto-init DB on startup ──
 @app.on_event("startup")
 def startup_init():
-    """Create DuckDB and schema if they don't exist."""
+    """Create DuckDB and schema, then auto-sync if DB is empty."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     os.makedirs(EXPORT_DIR, exist_ok=True)
     init_schema(DB_PATH)
     print(f"  DB ready: {DB_PATH}")
+
+    # Auto-sync SmartMoving data if DB is empty
+    try:
+        import duckdb
+        con = duckdb.connect(DB_PATH, read_only=True)
+        opp_count = con.execute("SELECT COUNT(*) FROM opportunities").fetchone()[0]
+        con.close()
+        if opp_count == 0:
+            print("  No opportunity data — starting auto-sync...")
+            api_sync()
+    except Exception as e:
+        print(f"  Auto-sync check failed: {e}")
 
 
 @app.get("/", response_class=HTMLResponse)
