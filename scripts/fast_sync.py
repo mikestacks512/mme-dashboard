@@ -16,7 +16,7 @@ sys.stdout.reconfigure(line_buffering=True)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "scripts"))
-from sm_api import api_get, get_opportunity_detail, HEADERS, BASE_URL
+from sm_api import api_get, get_opportunity_detail, _get_headers, _get_base_url
 
 DB_PATH = os.path.join(PROJECT_ROOT, "db", "mme_dashboard.duckdb")
 import duckdb
@@ -26,8 +26,9 @@ MIN_DATE = 20250401  # Last 12 months — skip fetching detail for older opps
 
 def fast_get(url, retries=10):
     """Aggressive GET with retry on 429."""
+    headers = _get_headers()
     for attempt in range(retries):
-        req = urllib.request.Request(url, headers=HEADERS)
+        req = urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.loads(resp.read().decode())
@@ -48,7 +49,7 @@ def sync_customers(con):
     count = 0
     page = 1
     while True:
-        data = fast_get(f"{BASE_URL}/customers?Page={page}&PageSize=200")
+        data = fast_get(f"{_get_base_url()}/customers?Page={page}&PageSize=200")
         for r in data.get("pageResults", []):
             con.execute("""
                 INSERT INTO customers (id, name, phone_number, phone_type, email_address, address, synced_at)
@@ -110,7 +111,7 @@ def main():
             start = time.time()
 
         try:
-            url = f"{BASE_URL}/customers/{cust_id}/opportunities"
+            url = f"{_get_base_url()}/customers/{cust_id}/opportunities"
             opps_data = fast_get(url)
         except Exception as e:
             errors += 1
@@ -126,7 +127,7 @@ def main():
 
             # Fetch full detail
             try:
-                opp = fast_get(f"{BASE_URL}/opportunities/{opp_s['id']}")
+                opp = fast_get(f"{_get_base_url()}/opportunities/{opp_s['id']}")
                 time.sleep(1.2)
             except Exception:
                 errors += 1

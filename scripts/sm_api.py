@@ -10,7 +10,7 @@ import urllib.error
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Load .env
+# Load .env (if present — not present on deployed environments)
 env_path = os.path.join(PROJECT_ROOT, ".env")
 if os.path.exists(env_path):
     with open(env_path) as f:
@@ -20,22 +20,36 @@ if os.path.exists(env_path):
                 key, value = line.split("=", 1)
                 os.environ.setdefault(key.strip(), value.strip())
 
+
+def _get_headers():
+    api_key = os.environ.get("SMARTMOVING_API_KEY", "")
+    client_id = os.environ.get("SMARTMOVING_CLIENT_ID", "")
+    headers = {"x-api-key": api_key, "Content-Type": "application/json"}
+    if client_id:
+        headers["x-client-id"] = client_id
+    return headers
+
+
+def _get_base_url():
+    return os.environ.get("SMARTMOVING_BASE_URL", "https://smartmoving-prod-api-management.azure-api.net/v1/api")
+
+
+# Module-level references for backward compatibility
 API_KEY = os.environ.get("SMARTMOVING_API_KEY", "")
 CLIENT_ID = os.environ.get("SMARTMOVING_CLIENT_ID", "")
-BASE_URL = os.environ.get("SMARTMOVING_BASE_URL", "https://smartmoving-prod-api-management.azure-api.net/v1/api")
-
-HEADERS = {"x-api-key": API_KEY, "Content-Type": "application/json"}
-if CLIENT_ID:
-    HEADERS["x-client-id"] = CLIENT_ID
+BASE_URL = _get_base_url()
+HEADERS = _get_headers()
 
 
 def api_get(endpoint, params=None, retries=5):
-    url = f"{BASE_URL}{endpoint}"
+    base = _get_base_url()
+    url = f"{base}{endpoint}"
     if params:
         qs = "&".join(f"{k}={v}" for k, v in params.items())
         url += f"?{qs}" if "?" not in url else f"&{qs}"
+    headers = _get_headers()
     for attempt in range(retries):
-        req = urllib.request.Request(url, headers=HEADERS)
+        req = urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.loads(resp.read().decode())
