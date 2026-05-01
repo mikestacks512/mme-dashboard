@@ -69,7 +69,14 @@ def _get_duckdb():
     import duckdb
     if not os.path.exists(DB_PATH):
         return None
-    return duckdb.connect(DB_PATH, read_only=True)
+    try:
+        return duckdb.connect(DB_PATH, read_only=True)
+    except Exception:
+        # If sync is writing, open in read-write mode instead
+        try:
+            return duckdb.connect(DB_PATH)
+        except Exception:
+            return None
 
 
 def _find_pl_csvs():
