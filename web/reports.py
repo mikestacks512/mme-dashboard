@@ -110,7 +110,7 @@ def _load_pl_totals_single(filepath):
 
 
 def _load_qb_monthly_single(filepath):
-    monthly = defaultdict(lambda: {"revenue": 0, "cogs": 0, "overhead": 0})
+    monthly = defaultdict(lambda: {"revenue": 0, "cogs": 0, "overhead": 0, "other_income": 0, "other_expense": 0, "accounts": defaultdict(float)})
     current_account = None
     with open(filepath) as f:
         for row in csv.reader(f):
@@ -125,27 +125,23 @@ def _load_qb_monthly_single(filepath):
                     dt = datetime.strptime(row[1].strip(), "%m/%d/%Y")
                     mk = dt.strftime("%Y-%m")
                     amt = _parse_amount(row[9])
+                    monthly[mk]["accounts"][current_account] += amt
                     if current_account.startswith("4"):
                         monthly[mk]["revenue"] += amt
                     elif current_account.startswith("5"):
                         monthly[mk]["cogs"] += amt
                     elif current_account.startswith("6"):
                         monthly[mk]["overhead"] += amt
+                    elif current_account.startswith("7"):
+                        monthly[mk]["other_income"] += amt
+                    elif current_account.startswith("8"):
+                        monthly[mk]["other_expense"] += amt
                 except (ValueError, IndexError):
                     pass
+    # Convert defaultdicts to regular dicts for serialization
+    for mk in monthly:
+        monthly[mk]["accounts"] = dict(monthly[mk]["accounts"])
     return dict(monthly)
-
-
-def _load_pl_totals(filepath=None):
-    """Load totals from all P&L files, with newer files overriding older ones."""
-    files = _find_pl_csvs()
-    if not files:
-        return {}
-    totals = {}
-    for f in files:
-        file_totals = _load_pl_totals_single(f)
-        totals.update(file_totals)  # Newer files override
-    return totals
 
 
 def _load_qb_monthly(filepath=None):
@@ -160,6 +156,59 @@ def _load_qb_monthly(filepath=None):
         for month, data in file_monthly.items():
             merged[month] = data
     return merged
+
+
+def _load_pl_totals(filepath=None):
+    """Calculate totals from merged monthly data so multi-file uploads stay consistent.
+
+    Account-level totals are summed from the per-account data tracked in each month.
+    This ensures that when a newer P&L upload overrides specific months, the totals
+    reflect the merged data rather than one file clobbering another.
+    """
+    monthly = _load_qb_monthly()
+    if not monthly:
+        return {}
+
+    # Sum account-level details across all merged months
+    account_totals = defaultdict(float)
+    for month_data in monthly.values():
+        for acct, amt in month_data.get("accounts", {}).items():
+            account_totals[acct] += amt
+
+    # Build the totals dict the rest of the code expects
+    totals = dict(account_totals)
+
+    # Add high-level rollups
+    totals["Income with sub-accounts"] = sum(d.get("revenue", 0) for d in monthly.values())
+    totals["Cost of Goods Sold with sub-accounts"] = sum(d.get("cogs", 0) for d in monthly.values())
+    totals["Expenses with sub-accounts"] = sum(d.get("overhead", 0) for d in monthly.values())
+    totals["Other Income with sub-accounts"] = sum(d.get("other_income", 0) for d in monthly.values())
+    totals["Other Expense with sub-accounts"] = sum(d.get("other_expense", 0) for d in monthly.values())
+
+    # Build "with sub-accounts" rollups for parent account groups
+    # e.g. "5001a..." + "5001b..." + "5001c..." -> "5001 Direct Labor with sub-accounts"
+    # Also read the base P&L file's "Total for" rows to get the correct parent names
+    parent_sums = defaultdict(float)
+    for acct, amt in account_totals.items():
+        parts = acct.split(" ", 1)
+        if len(parts) == 2:
+            num = parts[0]
+            base = num.rstrip("abcdefghijklmnopqrstuvwxyz")
+            if base:
+                parent_sums[base] += amt
+
+    # Read "Total for" rows from all files to get the parent account names
+    for f in _find_pl_csvs():
+        file_totals = _load_pl_totals_single(f)
+        for key, amt in file_totals.items():
+            # Extract the account number from keys like "5001 Direct Labor with sub-accounts"
+            if " with sub-accounts" in key:
+                base_name = key.replace(" with sub-accounts", "")
+                num = base_name.split(" ", 1)[0].rstrip("abcdefghijklmnopqrstuvwxyz")
+                if num in parent_sums:
+                    totals[key] = parent_sums[num]
+
+    return totals
 
 
 # ── Report: Leads ──
