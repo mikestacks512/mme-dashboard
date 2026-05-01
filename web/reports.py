@@ -72,16 +72,27 @@ def _get_duckdb():
     return duckdb.connect(DB_PATH, read_only=True)
 
 
-def _find_pl_csv():
+def _find_pl_csvs():
+    """Find all P&L CSV files in the exports directory, sorted by modification time (newest last)."""
     if not os.path.exists(EXPORT_DIR):
-        return None
+        return []
+    files = []
     for name in os.listdir(EXPORT_DIR):
         if "profit" in name.lower() and "loss" in name.lower() and name.endswith(".csv"):
-            return os.path.join(EXPORT_DIR, name)
-    return None
+            path = os.path.join(EXPORT_DIR, name)
+            files.append((os.path.getmtime(path), path))
+    # Sort by modification time — oldest first, newest last (newest wins on overlap)
+    files.sort()
+    return [f[1] for f in files]
 
 
-def _load_pl_totals(filepath):
+def _find_pl_csv():
+    """Backward compat: return first P&L CSV found."""
+    files = _find_pl_csvs()
+    return files[0] if files else None
+
+
+def _load_pl_totals_single(filepath):
     totals = {}
     with open(filepath) as f:
         for row in csv.reader(f):
@@ -91,7 +102,7 @@ def _load_pl_totals(filepath):
     return totals
 
 
-def _load_qb_monthly(filepath):
+def _load_qb_monthly_single(filepath):
     monthly = defaultdict(lambda: {"revenue": 0, "cogs": 0, "overhead": 0})
     current_account = None
     with open(filepath) as f:
@@ -116,6 +127,32 @@ def _load_qb_monthly(filepath):
                 except (ValueError, IndexError):
                     pass
     return dict(monthly)
+
+
+def _load_pl_totals(filepath=None):
+    """Load totals from all P&L files, with newer files overriding older ones."""
+    files = _find_pl_csvs()
+    if not files:
+        return {}
+    totals = {}
+    for f in files:
+        file_totals = _load_pl_totals_single(f)
+        totals.update(file_totals)  # Newer files override
+    return totals
+
+
+def _load_qb_monthly(filepath=None):
+    """Load monthly data from all P&L files. Newer files override overlapping months."""
+    files = _find_pl_csvs()
+    if not files:
+        return {}
+    merged = {}
+    for f in files:
+        file_monthly = _load_qb_monthly_single(f)
+        # Newer file's months completely replace older file's months
+        for month, data in file_monthly.items():
+            merged[month] = data
+    return merged
 
 
 # ── Report: Leads ──
@@ -175,13 +212,13 @@ def get_leads():
 # ── Report: Financial ──
 
 def get_financial():
-    """Financial control from QuickBooks P&L CSV."""
-    pl_path = _find_pl_csv()
-    if not pl_path:
+    """Financial control from QuickBooks P&L CSV(s)."""
+    files = _find_pl_csvs()
+    if not files:
         return {"error": "P&L Detail CSV not found in exports/"}
 
-    t = _load_pl_totals(pl_path)
-    monthly_raw = _load_qb_monthly(pl_path)
+    t = _load_pl_totals()
+    monthly_raw = _load_qb_monthly()
 
     revenue = t.get("Income with sub-accounts", 0)
     if revenue == 0:
@@ -498,14 +535,11 @@ def get_marketing():
     if not con:
         return {"error": "DuckDB not found."}
 
-    # Marketing spend from QB
+    # Marketing spend from QB (merged across all P&L files)
     marketing_spend = 0
-    pl_path = _find_pl_csv()
-    if pl_path:
-        with open(pl_path) as f:
-            for row in csv.reader(f):
-                if row and row[0] == "Total for 6002 Advertising, Marketing, & Promo" and len(row) > 9:
-                    marketing_spend = _parse_amount(row[9])
+    t = _load_pl_totals()
+    if t:
+        marketing_spend = t.get("6002 Advertising, Marketing, & Promo", 0)
 
     channels = con.execute("""
         SELECT
@@ -610,11 +644,10 @@ def get_trends():
 
     con.close()
 
-    # QB monthly
+    # QB monthly (merged across all P&L files)
     qb_monthly = []
-    pl_path = _find_pl_csv()
-    if pl_path:
-        qb_raw = _load_qb_monthly(pl_path)
+    qb_raw = _load_qb_monthly()
+    if qb_raw:
         for month in sorted(qb_raw.keys()):
             d = qb_raw[month]
             rev = d["revenue"]

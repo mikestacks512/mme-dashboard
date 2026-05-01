@@ -102,17 +102,19 @@ def api_sync_status():
 # ── QB CSV upload ──
 @app.post("/api/upload-pl")
 async def upload_pl(file: UploadFile = File(...)):
-    """Upload a QuickBooks Profit & Loss Detail CSV."""
+    """Upload a QuickBooks Profit & Loss Detail CSV. Saved alongside existing files — newer uploads override overlapping months."""
     if not file.filename.endswith(".csv"):
         return JSONResponse(status_code=400, content={"error": "File must be a CSV"})
 
     os.makedirs(EXPORT_DIR, exist_ok=True)
-    dest = os.path.join(EXPORT_DIR, "mme_profit_and_loss_detail.csv")
+    # Save with timestamp so multiple uploads coexist (newest wins for overlapping months)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dest = os.path.join(EXPORT_DIR, f"profit_and_loss_upload_{ts}.csv")
     content = await file.read()
     with open(dest, "wb") as f:
         f.write(content)
 
-    return {"status": "ok", "message": f"Uploaded {file.filename} ({len(content):,} bytes)", "path": dest}
+    return {"status": "ok", "message": f"Uploaded {file.filename} ({len(content):,} bytes). Data merged with existing P&L files — updated months will override older data.", "path": dest}
 
 
 @app.get("/api/data-status")
