@@ -167,6 +167,75 @@ def init_schema(db_path=DB_PATH):
         )
     """)
 
+    # ── Manual inputs (entered via the Inputs tab in the web UI) ──
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS trucks (
+            id VARCHAR PRIMARY KEY,
+            name VARCHAR NOT NULL,
+            truck_type VARCHAR,
+            capacity_cuft INTEGER,
+            active BOOLEAN DEFAULT TRUE,
+            notes VARCHAR,
+            created_at TIMESTAMP DEFAULT current_timestamp
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS truck_utilization_daily (
+            entry_date DATE,
+            truck_id VARCHAR,
+            in_service BOOLEAN DEFAULT TRUE,
+            jobs_count INTEGER DEFAULT 0,
+            hours_used DOUBLE DEFAULT 0,
+            notes VARCHAR,
+            created_at TIMESTAMP DEFAULT current_timestamp,
+            PRIMARY KEY (entry_date, truck_id)
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS storage_units (
+            id VARCHAR PRIMARY KEY,
+            label VARCHAR NOT NULL,
+            size_class VARCHAR,
+            cubic_feet DOUBLE,
+            monthly_rate DOUBLE,
+            active BOOLEAN DEFAULT TRUE,
+            notes VARCHAR,
+            created_at TIMESTAMP DEFAULT current_timestamp
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS storage_snapshots (
+            snapshot_date DATE PRIMARY KEY,
+            units_total INTEGER,
+            units_occupied INTEGER,
+            mrr DOUBLE,
+            delinquent_30 INTEGER DEFAULT 0,
+            delinquent_60 INTEGER DEFAULT 0,
+            delinquent_90 INTEGER DEFAULT 0,
+            move_ins INTEGER DEFAULT 0,
+            move_outs INTEGER DEFAULT 0,
+            notes VARCHAR,
+            created_at TIMESTAMP DEFAULT current_timestamp
+        )
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS jobs_turned_away (
+            entry_date DATE,
+            id VARCHAR,
+            count INTEGER DEFAULT 1,
+            est_revenue_lost DOUBLE DEFAULT 0,
+            reason VARCHAR,
+            notes VARCHAR,
+            created_at TIMESTAMP DEFAULT current_timestamp,
+            PRIMARY KEY (entry_date, id)
+        )
+    """)
+
     # ── Snapshot table (frozen daily metrics, append-only) ──
 
     con.execute("""

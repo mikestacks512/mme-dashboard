@@ -11,12 +11,13 @@ import sys
 import argparse
 import threading
 from datetime import datetime
+from typing import Optional
 
 # Ensure project root is on the path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -28,6 +29,7 @@ from web.reports import (
     get_claims, get_yoy, get_monthly_detail,
     DB_PATH, EXPORT_DIR,
 )
+from web import inputs as manual_inputs
 
 app = FastAPI(title="MME Dashboard", version="2.0")
 
@@ -285,6 +287,155 @@ def api_monthly(month: str):
         return get_monthly_detail(month)
     except Exception as e:
         return {"error": f"Monthly detail: {e}"}
+
+# ── Manual inputs (trucks, storage, turnaways) ──
+
+def _input_error(e):
+    return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.get("/api/inputs/summary")
+def api_inputs_summary():
+    try:
+        return manual_inputs.inputs_summary()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/inputs/trucks")
+def api_inputs_trucks_list():
+    try:
+        return {"trucks": manual_inputs.list_trucks()}
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.post("/api/inputs/trucks")
+async def api_inputs_trucks_upsert(request: Request):
+    try:
+        payload = await request.json()
+        return manual_inputs.upsert_truck(payload)
+    except ValueError as e:
+        return _input_error(e)
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.delete("/api/inputs/trucks/{truck_id}")
+def api_inputs_trucks_delete(truck_id: str):
+    try:
+        return manual_inputs.delete_truck(truck_id)
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.get("/api/inputs/truck-utilization")
+def api_inputs_util_list(start: Optional[str] = None, end: Optional[str] = None):
+    try:
+        return {"entries": manual_inputs.list_truck_utilization(start, end)}
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.post("/api/inputs/truck-utilization")
+async def api_inputs_util_upsert(request: Request):
+    try:
+        payload = await request.json()
+        return manual_inputs.upsert_truck_utilization(payload)
+    except ValueError as e:
+        return _input_error(e)
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.delete("/api/inputs/truck-utilization")
+def api_inputs_util_delete(entry_date: str, truck_id: str):
+    try:
+        return manual_inputs.delete_truck_utilization(entry_date, truck_id)
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.get("/api/inputs/storage-units")
+def api_inputs_units_list():
+    try:
+        return {"units": manual_inputs.list_storage_units()}
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.post("/api/inputs/storage-units")
+async def api_inputs_units_upsert(request: Request):
+    try:
+        payload = await request.json()
+        return manual_inputs.upsert_storage_unit(payload)
+    except ValueError as e:
+        return _input_error(e)
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.delete("/api/inputs/storage-units/{unit_id}")
+def api_inputs_units_delete(unit_id: str):
+    try:
+        return manual_inputs.delete_storage_unit(unit_id)
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.get("/api/inputs/storage-snapshots")
+def api_inputs_snapshots_list(limit: int = 90):
+    try:
+        return {"snapshots": manual_inputs.list_storage_snapshots(limit)}
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.post("/api/inputs/storage-snapshots")
+async def api_inputs_snapshots_upsert(request: Request):
+    try:
+        payload = await request.json()
+        return manual_inputs.upsert_storage_snapshot(payload)
+    except ValueError as e:
+        return _input_error(e)
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.delete("/api/inputs/storage-snapshots/{snapshot_date}")
+def api_inputs_snapshots_delete(snapshot_date: str):
+    try:
+        return manual_inputs.delete_storage_snapshot(snapshot_date)
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.get("/api/inputs/turnaways")
+def api_inputs_turnaways_list(limit: int = 200):
+    try:
+        return {"entries": manual_inputs.list_turnaways(limit)}
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.post("/api/inputs/turnaways")
+async def api_inputs_turnaways_upsert(request: Request):
+    try:
+        payload = await request.json()
+        return manual_inputs.upsert_turnaway(payload)
+    except ValueError as e:
+        return _input_error(e)
+    except Exception as e:
+        return _input_error(e)
+
+
+@app.delete("/api/inputs/turnaways")
+def api_inputs_turnaways_delete(entry_date: str, id: str):
+    try:
+        return manual_inputs.delete_turnaway(entry_date, id)
+    except Exception as e:
+        return _input_error(e)
+
 
 @app.get("/api/callcenter")
 def api_callcenter():

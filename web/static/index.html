@@ -311,6 +311,49 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 .p10-value.warn { color: var(--yellow); }
 .p10-value.bad { color: var(--red); }
 .p10-value.neutral { color: var(--text); }
+
+/* ── Inputs tab forms ── */
+.input-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; align-items: end; }
+.input-form .field { display: flex; flex-direction: column; gap: 4px; }
+.input-form .field.full { grid-column: 1 / -1; }
+.input-form label {
+  font-size: 10px; color: var(--text-dim); text-transform: uppercase;
+  letter-spacing: 0.8px; font-weight: 600;
+}
+.input-form input[type=text],
+.input-form input[type=number],
+.input-form input[type=date],
+.input-form select,
+.input-form textarea {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 10px; font-size: 13px;
+  font-family: inherit; outline: none; transition: border-color 0.15s;
+}
+.input-form input:focus, .input-form select:focus, .input-form textarea:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow);
+}
+.input-form input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
+.input-form .check-row { display: flex; align-items: center; gap: 8px; height: 36px; }
+.input-form button {
+  padding: 8px 18px; background: var(--accent); color: #fff; border: none;
+  border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;
+  letter-spacing: 0.3px; transition: background 0.15s;
+}
+.input-form button:hover { background: var(--accent-light); }
+.input-form button.ghost {
+  background: transparent; color: var(--text-dim); border: 1px solid var(--border);
+}
+.input-form button.ghost:hover { color: var(--text); border-color: var(--border-glow); background: transparent; }
+.btn-link {
+  background: transparent; color: var(--text-dim); border: none; cursor: pointer;
+  font-size: 11px; text-decoration: underline; padding: 0;
+}
+.btn-link.danger { color: var(--red); }
+.btn-link:hover { color: var(--text); }
+.input-section { margin-bottom: 32px; }
+.input-status { font-size: 12px; margin-top: 10px; min-height: 16px; }
+.input-status.ok { color: var(--green); }
+.input-status.err { color: var(--red); }
 </style>
 </head>
 <body>
@@ -346,6 +389,7 @@ tr:hover td { background: rgba(255,255,255,0.02); }
   <div class="tab" data-tab="claims">Claims</div>
   <div class="tab" data-tab="yoy">Year vs Year</div>
   <div class="tab" data-tab="trends">Trends</div>
+  <div class="tab" data-tab="inputs">Inputs</div>
   <div class="tab" data-tab="data">Data Mgmt</div>
 </div>
 
@@ -363,6 +407,7 @@ tr:hover td { background: rgba(255,255,255,0.02); }
   <div class="panel" id="panel-claims"><div class="loading">Loading claims...</div></div>
   <div class="panel" id="panel-yoy"><div class="loading">Loading year-over-year...</div></div>
   <div class="panel" id="panel-trends"><div class="loading">Loading trends...</div></div>
+  <div class="panel" id="panel-inputs"></div>
   <div class="panel" id="panel-data"></div>
 </div>
 
@@ -480,8 +525,8 @@ function refreshCurrent() {
 
 async function loadTab(name) {
   const panel = $(`#panel-${name}`);
-  // Data management tab doesn't need an API call
-  if (name === 'data') { cache[name] = true; renderers[name](panel); return; }
+  // Data management and inputs tabs render their own forms; no single API call
+  if (name === 'data' || name === 'inputs') { cache[name] = true; renderers[name](panel); return; }
   try {
     const resp = await fetch(`/api/${name}`);
     const data = await resp.json();
@@ -1395,6 +1440,151 @@ const renderers = {
   },
 
 
+  /* ── INPUTS (manual data entry) ── */
+  inputs(panel) {
+    const today = new Date().toISOString().slice(0, 10);
+    panel.innerHTML = `
+      <div class="question">Manual Inputs</div>
+      <div class="question-sub">Data with no API source — fleet roster, daily truck utilization, storage units &amp; occupancy snapshots, and jobs turned away.</div>
+
+      <div id="inputs-summary" class="scorecards"><div class="loading" style="padding:20px">Loading summary...</div></div>
+
+      <!-- Fleet Roster -->
+      <div class="input-section">
+        <div class="section-title">Fleet Roster</div>
+        <div class="scorecard" style="margin-bottom:16px">
+          <form class="input-form" id="truck-form" onsubmit="return saveTruck(event)">
+            <input type="hidden" id="truck-id">
+            <div class="field"><label>Name *</label><input type="text" id="truck-name" placeholder="Truck 12 / 26ft Box" required></div>
+            <div class="field"><label>Type</label>
+              <select id="truck-type">
+                <option value="">—</option>
+                <option>26ft Box</option><option>20ft Box</option><option>16ft Box</option>
+                <option>Cargo Van</option><option>Pickup</option><option>Trailer</option><option>Other</option>
+              </select>
+            </div>
+            <div class="field"><label>Capacity (cuft)</label><input type="number" id="truck-capacity" min="0" placeholder="1700"></div>
+            <div class="field"><label>Active</label>
+              <div class="check-row"><input type="checkbox" id="truck-active" checked><span style="font-size:12px;color:var(--text-dim)">In service</span></div>
+            </div>
+            <div class="field full"><label>Notes</label><input type="text" id="truck-notes" placeholder="Lift gate, dual-axle, etc."></div>
+            <div><button type="submit">Save Truck</button> <button type="button" class="ghost" onclick="resetTruckForm()">Clear</button></div>
+            <div class="input-status full" id="truck-status"></div>
+          </form>
+        </div>
+        <div id="trucks-list"><div class="loading">Loading trucks...</div></div>
+      </div>
+
+      <!-- Daily Truck Utilization -->
+      <div class="input-section">
+        <div class="section-title">Daily Truck Utilization</div>
+        <div class="scorecard" style="margin-bottom:16px">
+          <form class="input-form" id="util-form" onsubmit="return saveUtilization(event)">
+            <div class="field"><label>Date *</label><input type="date" id="util-date" value="${today}" required></div>
+            <div class="field"><label>Truck *</label><select id="util-truck" required><option value="">Select…</option></select></div>
+            <div class="field"><label>In Service</label>
+              <div class="check-row"><input type="checkbox" id="util-in-service" checked><span style="font-size:12px;color:var(--text-dim)">Ran today</span></div>
+            </div>
+            <div class="field"><label>Jobs</label><input type="number" id="util-jobs" min="0" value="0"></div>
+            <div class="field"><label>Hours</label><input type="number" id="util-hours" step="0.25" min="0" value="0"></div>
+            <div class="field full"><label>Notes</label><input type="text" id="util-notes" placeholder="Down for maintenance, double-shift, etc."></div>
+            <div><button type="submit">Log Utilization</button></div>
+            <div class="input-status full" id="util-status"></div>
+          </form>
+        </div>
+        <div id="util-list"><div class="loading">Loading entries...</div></div>
+      </div>
+
+      <!-- Storage Units -->
+      <div class="input-section">
+        <div class="section-title">Storage Unit Roster</div>
+        <div class="scorecard" style="margin-bottom:16px">
+          <form class="input-form" id="unit-form" onsubmit="return saveUnit(event)">
+            <input type="hidden" id="unit-id">
+            <div class="field"><label>Label *</label><input type="text" id="unit-label" placeholder="A-12, Container #5" required></div>
+            <div class="field"><label>Size Class</label>
+              <select id="unit-size">
+                <option value="">—</option>
+                <option>5x10</option><option>10x10</option><option>10x15</option><option>10x20</option>
+                <option>20ft Container</option><option>40ft Container</option><option>Vault</option><option>Other</option>
+              </select>
+            </div>
+            <div class="field"><label>Cubic Feet</label><input type="number" id="unit-cuft" step="1" min="0"></div>
+            <div class="field"><label>Monthly Rate ($)</label><input type="number" id="unit-rate" step="1" min="0"></div>
+            <div class="field"><label>Active</label>
+              <div class="check-row"><input type="checkbox" id="unit-active" checked><span style="font-size:12px;color:var(--text-dim)">Available</span></div>
+            </div>
+            <div class="field full"><label>Notes</label><input type="text" id="unit-notes"></div>
+            <div><button type="submit">Save Unit</button> <button type="button" class="ghost" onclick="resetUnitForm()">Clear</button></div>
+            <div class="input-status full" id="unit-status"></div>
+          </form>
+        </div>
+        <div id="units-list"><div class="loading">Loading units...</div></div>
+      </div>
+
+      <!-- Storage Snapshots -->
+      <div class="input-section">
+        <div class="section-title">Storage Occupancy Snapshot</div>
+        <div class="question-sub" style="margin-top:-8px">Log once a week (or daily) so the dashboard can trend occupancy and delinquency.</div>
+        <div class="scorecard" style="margin-bottom:16px">
+          <form class="input-form" id="snap-form" onsubmit="return saveSnapshot(event)">
+            <div class="field"><label>Date *</label><input type="date" id="snap-date" value="${today}" required></div>
+            <div class="field"><label>Units Total</label><input type="number" id="snap-total" min="0"></div>
+            <div class="field"><label>Units Occupied</label><input type="number" id="snap-occ" min="0"></div>
+            <div class="field"><label>MRR ($)</label><input type="number" id="snap-mrr" min="0" step="1"></div>
+            <div class="field"><label>Move-Ins</label><input type="number" id="snap-mi" min="0" value="0"></div>
+            <div class="field"><label>Move-Outs</label><input type="number" id="snap-mo" min="0" value="0"></div>
+            <div class="field"><label>Delinquent 30d</label><input type="number" id="snap-d30" min="0" value="0"></div>
+            <div class="field"><label>Delinquent 60d</label><input type="number" id="snap-d60" min="0" value="0"></div>
+            <div class="field"><label>Delinquent 90d</label><input type="number" id="snap-d90" min="0" value="0"></div>
+            <div class="field full"><label>Notes</label><input type="text" id="snap-notes"></div>
+            <div><button type="submit">Save Snapshot</button></div>
+            <div class="input-status full" id="snap-status"></div>
+          </form>
+        </div>
+        <div id="snap-list"><div class="loading">Loading snapshots...</div></div>
+      </div>
+
+      <!-- Turnaways -->
+      <div class="input-section">
+        <div class="section-title">Jobs Turned Away</div>
+        <div class="question-sub" style="margin-top:-8px">Capacity-lost revenue. Log every time a customer is turned away because the schedule is full.</div>
+        <div class="scorecard" style="margin-bottom:16px">
+          <form class="input-form" id="ta-form" onsubmit="return saveTurnaway(event)">
+            <div class="field"><label>Date *</label><input type="date" id="ta-date" value="${today}" required></div>
+            <div class="field"><label>Count</label><input type="number" id="ta-count" min="1" value="1"></div>
+            <div class="field"><label>Est. Revenue Lost ($)</label><input type="number" id="ta-rev" min="0" step="1"></div>
+            <div class="field"><label>Reason</label>
+              <select id="ta-reason">
+                <option value="">—</option>
+                <option>Capacity / fully booked</option>
+                <option>Date conflict</option>
+                <option>Out of service area</option>
+                <option>Job too small</option>
+                <option>Job too large</option>
+                <option>Pricing</option>
+                <option>Other</option>
+              </select>
+            </div>
+            <div class="field full"><label>Notes</label><input type="text" id="ta-notes"></div>
+            <div><button type="submit">Log Turnaway</button></div>
+            <div class="input-status full" id="ta-status"></div>
+          </form>
+        </div>
+        <div id="ta-list"><div class="loading">Loading turnaways...</div></div>
+      </div>
+    `;
+
+    // Initial loads
+    loadInputsSummary();
+    loadTrucks();
+    loadUtilization();
+    loadUnits();
+    loadSnapshots();
+    loadTurnaways();
+  },
+
+
   /* ── DATA MANAGEMENT ── */
   data(panel) {
     let html = `<div class="question">Data Management</div>
@@ -1598,6 +1788,433 @@ async function uploadPL() {
   } catch (e) {
     status.innerHTML = `<span style="color:var(--red)">Upload failed: ${e.message}</span>`;
   }
+}
+
+/* ── Inputs tab helpers ── */
+const _esc = s => s == null ? '' : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const _money = v => v == null || v === '' ? '—' : '$' + Math.round(Number(v)).toLocaleString();
+const _num = v => v == null || v === '' ? '—' : Number(v).toLocaleString();
+
+function _setStatus(elId, msg, kind) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.className = 'input-status ' + (kind || '');
+  el.textContent = msg || '';
+}
+
+async function loadInputsSummary() {
+  const box = document.getElementById('inputs-summary');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/inputs/summary');
+    const d = await r.json();
+    if (d.error) { box.innerHTML = `<div class="error-msg">${d.error}</div>`; return; }
+    let cards = '';
+    cards += sc('Active Trucks', _num(d.truck_count), 'In your fleet roster.', '');
+    cards += sc('Active Storage Units', _num(d.storage_unit_count), 'Available to rent.', '');
+    if (d.latest_snapshot) {
+      const ls = d.latest_snapshot;
+      cards += sc('Latest Occupancy',
+        ls.occupancy_pct != null ? ls.occupancy_pct + '%' : '—',
+        `As of ${ls.snapshot_date} · ${ls.units_occupied || 0} of ${ls.units_total || 0} units · MRR ${_money(ls.mrr)}`,
+        ls.occupancy_pct == null ? '' : (ls.occupancy_pct >= 85 ? 'OK' : ls.occupancy_pct >= 70 ? 'WARN' : 'MISS'));
+    } else {
+      cards += sc('Latest Occupancy', '—', 'No snapshots logged yet.', 'MISS');
+    }
+    cards += sc('Util Logged (7d)',
+      _num(d.util_last_7?.days_logged || 0) + ' days',
+      d.util_last_7?.days_logged ? `Avg ${d.util_last_7.avg_in_service_pct}% trucks in service.` : 'Log daily utilization to track this.',
+      (d.util_last_7?.days_logged || 0) >= 5 ? 'OK' : 'WARN');
+    cards += sc('Turnaways (30d)',
+      _num(d.turnaways_last_30?.count || 0),
+      d.turnaways_last_30?.count ? `Est. ${_money(d.turnaways_last_30.est_revenue_lost)} revenue lost.` : 'No turnaways logged.',
+      '');
+    box.innerHTML = cards;
+  } catch (e) {
+    box.innerHTML = `<div class="error-msg">Summary failed: ${e.message}</div>`;
+  }
+}
+
+/* ── Trucks ── */
+async function loadTrucks() {
+  const list = document.getElementById('trucks-list');
+  const sel = document.getElementById('util-truck');
+  try {
+    const r = await fetch('/api/inputs/trucks');
+    const d = await r.json();
+    if (d.error) { list.innerHTML = `<div class="error-msg">${d.error}</div>`; return; }
+    const trucks = d.trucks || [];
+    if (sel) {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">Select…</option>' +
+        trucks.filter(t => t.active).map(t => `<option value="${_esc(t.id)}">${_esc(t.name)}</option>`).join('');
+      if (cur) sel.value = cur;
+    }
+    if (!trucks.length) {
+      list.innerHTML = '<div class="question-sub" style="padding:8px 0">No trucks yet. Add one above.</div>';
+      return;
+    }
+    list.innerHTML = makeTable(
+      [
+        { key: 'name', label: 'Name' },
+        { key: 'truck_type', label: 'Type' },
+        { key: 'capacity_cuft', label: 'Capacity', align: 'right',
+          render: r => r.capacity_cuft ? r.capacity_cuft.toLocaleString() + ' cuft' : '—' },
+        { key: 'active', label: 'Status',
+          render: r => r.active ? '<span class="badge badge-ok">Active</span>' : '<span class="badge badge-miss">Inactive</span>' },
+        { key: 'notes', label: 'Notes', render: r => _esc(r.notes || '') },
+        { key: 'actions', label: '',
+          render: r => `<button class="btn-link" onclick="editTruck('${_esc(r.id)}')">Edit</button> &middot; <button class="btn-link danger" onclick="deleteTruck('${_esc(r.id)}','${_esc(r.name)}')">Delete</button>` },
+      ],
+      trucks
+    );
+    window._trucksCache = trucks;
+  } catch (e) {
+    list.innerHTML = `<div class="error-msg">Failed to load trucks: ${e.message}</div>`;
+  }
+}
+
+function resetTruckForm() {
+  document.getElementById('truck-id').value = '';
+  document.getElementById('truck-name').value = '';
+  document.getElementById('truck-type').value = '';
+  document.getElementById('truck-capacity').value = '';
+  document.getElementById('truck-active').checked = true;
+  document.getElementById('truck-notes').value = '';
+  _setStatus('truck-status', '');
+}
+
+function editTruck(id) {
+  const t = (window._trucksCache || []).find(x => x.id === id);
+  if (!t) return;
+  document.getElementById('truck-id').value = t.id;
+  document.getElementById('truck-name').value = t.name || '';
+  document.getElementById('truck-type').value = t.truck_type || '';
+  document.getElementById('truck-capacity').value = t.capacity_cuft || '';
+  document.getElementById('truck-active').checked = !!t.active;
+  document.getElementById('truck-notes').value = t.notes || '';
+  _setStatus('truck-status', `Editing "${t.name}". Save to update or Clear to cancel.`, 'ok');
+  window.scrollTo({ top: document.getElementById('truck-form').offsetTop - 20, behavior: 'smooth' });
+}
+
+async function saveTruck(ev) {
+  ev.preventDefault();
+  const payload = {
+    id: document.getElementById('truck-id').value || null,
+    name: document.getElementById('truck-name').value,
+    truck_type: document.getElementById('truck-type').value,
+    capacity_cuft: document.getElementById('truck-capacity').value,
+    active: document.getElementById('truck-active').checked,
+    notes: document.getElementById('truck-notes').value,
+  };
+  try {
+    const r = await fetch('/api/inputs/trucks', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const d = await r.json();
+    if (d.error) { _setStatus('truck-status', d.error, 'err'); return false; }
+    _setStatus('truck-status', `Saved "${d.name}".`, 'ok');
+    resetTruckForm();
+    loadTrucks();
+    loadInputsSummary();
+  } catch (e) {
+    _setStatus('truck-status', e.message, 'err');
+  }
+  return false;
+}
+
+async function deleteTruck(id, name) {
+  if (!confirm(`Delete truck "${name}"? Utilization log entries for this truck will also be removed.`)) return;
+  try {
+    const r = await fetch('/api/inputs/trucks/' + encodeURIComponent(id), { method: 'DELETE' });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    loadTrucks();
+    loadUtilization();
+    loadInputsSummary();
+  } catch (e) { alert(e.message); }
+}
+
+/* ── Truck utilization ── */
+async function loadUtilization() {
+  const list = document.getElementById('util-list');
+  try {
+    const r = await fetch('/api/inputs/truck-utilization');
+    const d = await r.json();
+    if (d.error) { list.innerHTML = `<div class="error-msg">${d.error}</div>`; return; }
+    const rows = d.entries || [];
+    if (!rows.length) {
+      list.innerHTML = '<div class="question-sub" style="padding:8px 0">No utilization logged yet.</div>';
+      return;
+    }
+    list.innerHTML = makeTable(
+      [
+        { key: 'entry_date', label: 'Date' },
+        { key: 'truck_name', label: 'Truck', render: r => _esc(r.truck_name || r.truck_id) },
+        { key: 'in_service', label: 'In Service',
+          render: r => r.in_service ? '<span class="badge badge-ok">Yes</span>' : '<span class="badge badge-miss">No</span>' },
+        { key: 'jobs_count', label: 'Jobs', align: 'right' },
+        { key: 'hours_used', label: 'Hours', align: 'right',
+          render: r => r.hours_used != null ? Number(r.hours_used).toFixed(2) : '' },
+        { key: 'notes', label: 'Notes', render: r => _esc(r.notes || '') },
+        { key: 'actions', label: '',
+          render: r => `<button class="btn-link danger" onclick="deleteUtil('${_esc(r.entry_date)}','${_esc(r.truck_id)}')">Delete</button>` },
+      ],
+      rows.slice(0, 60)
+    );
+  } catch (e) {
+    list.innerHTML = `<div class="error-msg">Failed: ${e.message}</div>`;
+  }
+}
+
+async function saveUtilization(ev) {
+  ev.preventDefault();
+  const payload = {
+    entry_date: document.getElementById('util-date').value,
+    truck_id: document.getElementById('util-truck').value,
+    in_service: document.getElementById('util-in-service').checked,
+    jobs_count: document.getElementById('util-jobs').value || 0,
+    hours_used: document.getElementById('util-hours').value || 0,
+    notes: document.getElementById('util-notes').value,
+  };
+  try {
+    const r = await fetch('/api/inputs/truck-utilization', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const d = await r.json();
+    if (d.error) { _setStatus('util-status', d.error, 'err'); return false; }
+    _setStatus('util-status', `Logged ${d.entry_date}.`, 'ok');
+    document.getElementById('util-jobs').value = 0;
+    document.getElementById('util-hours').value = 0;
+    document.getElementById('util-notes').value = '';
+    loadUtilization();
+    loadInputsSummary();
+  } catch (e) { _setStatus('util-status', e.message, 'err'); }
+  return false;
+}
+
+async function deleteUtil(entryDate, truckId) {
+  if (!confirm(`Delete utilization entry for ${entryDate}?`)) return;
+  try {
+    const url = `/api/inputs/truck-utilization?entry_date=${encodeURIComponent(entryDate)}&truck_id=${encodeURIComponent(truckId)}`;
+    const r = await fetch(url, { method: 'DELETE' });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    loadUtilization();
+  } catch (e) { alert(e.message); }
+}
+
+/* ── Storage units ── */
+async function loadUnits() {
+  const list = document.getElementById('units-list');
+  try {
+    const r = await fetch('/api/inputs/storage-units');
+    const d = await r.json();
+    if (d.error) { list.innerHTML = `<div class="error-msg">${d.error}</div>`; return; }
+    const units = d.units || [];
+    window._unitsCache = units;
+    if (!units.length) {
+      list.innerHTML = '<div class="question-sub" style="padding:8px 0">No units yet. Add one above.</div>';
+      return;
+    }
+    list.innerHTML = makeTable(
+      [
+        { key: 'label', label: 'Label' },
+        { key: 'size_class', label: 'Size' },
+        { key: 'cubic_feet', label: 'Cuft', align: 'right',
+          render: r => r.cubic_feet ? Number(r.cubic_feet).toLocaleString() : '' },
+        { key: 'monthly_rate', label: 'Monthly', align: 'right',
+          render: r => r.monthly_rate ? _money(r.monthly_rate) : '' },
+        { key: 'active', label: 'Status',
+          render: r => r.active ? '<span class="badge badge-ok">Active</span>' : '<span class="badge badge-miss">Inactive</span>' },
+        { key: 'notes', label: 'Notes', render: r => _esc(r.notes || '') },
+        { key: 'actions', label: '',
+          render: r => `<button class="btn-link" onclick="editUnit('${_esc(r.id)}')">Edit</button> &middot; <button class="btn-link danger" onclick="deleteUnit('${_esc(r.id)}','${_esc(r.label)}')">Delete</button>` },
+      ],
+      units
+    );
+  } catch (e) { list.innerHTML = `<div class="error-msg">Failed: ${e.message}</div>`; }
+}
+
+function resetUnitForm() {
+  ['unit-id','unit-label','unit-size','unit-cuft','unit-rate','unit-notes'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('unit-active').checked = true;
+  _setStatus('unit-status', '');
+}
+
+function editUnit(id) {
+  const u = (window._unitsCache || []).find(x => x.id === id);
+  if (!u) return;
+  document.getElementById('unit-id').value = u.id;
+  document.getElementById('unit-label').value = u.label || '';
+  document.getElementById('unit-size').value = u.size_class || '';
+  document.getElementById('unit-cuft').value = u.cubic_feet || '';
+  document.getElementById('unit-rate').value = u.monthly_rate || '';
+  document.getElementById('unit-active').checked = !!u.active;
+  document.getElementById('unit-notes').value = u.notes || '';
+  _setStatus('unit-status', `Editing "${u.label}".`, 'ok');
+  window.scrollTo({ top: document.getElementById('unit-form').offsetTop - 20, behavior: 'smooth' });
+}
+
+async function saveUnit(ev) {
+  ev.preventDefault();
+  const payload = {
+    id: document.getElementById('unit-id').value || null,
+    label: document.getElementById('unit-label').value,
+    size_class: document.getElementById('unit-size').value,
+    cubic_feet: document.getElementById('unit-cuft').value,
+    monthly_rate: document.getElementById('unit-rate').value,
+    active: document.getElementById('unit-active').checked,
+    notes: document.getElementById('unit-notes').value,
+  };
+  try {
+    const r = await fetch('/api/inputs/storage-units', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const d = await r.json();
+    if (d.error) { _setStatus('unit-status', d.error, 'err'); return false; }
+    _setStatus('unit-status', `Saved "${d.label}".`, 'ok');
+    resetUnitForm();
+    loadUnits();
+    loadInputsSummary();
+  } catch (e) { _setStatus('unit-status', e.message, 'err'); }
+  return false;
+}
+
+async function deleteUnit(id, label) {
+  if (!confirm(`Delete unit "${label}"?`)) return;
+  try {
+    const r = await fetch('/api/inputs/storage-units/' + encodeURIComponent(id), { method: 'DELETE' });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    loadUnits();
+    loadInputsSummary();
+  } catch (e) { alert(e.message); }
+}
+
+/* ── Storage snapshots ── */
+async function loadSnapshots() {
+  const list = document.getElementById('snap-list');
+  try {
+    const r = await fetch('/api/inputs/storage-snapshots');
+    const d = await r.json();
+    if (d.error) { list.innerHTML = `<div class="error-msg">${d.error}</div>`; return; }
+    const rows = d.snapshots || [];
+    if (!rows.length) {
+      list.innerHTML = '<div class="question-sub" style="padding:8px 0">No snapshots yet.</div>';
+      return;
+    }
+    list.innerHTML = makeTable(
+      [
+        { key: 'snapshot_date', label: 'Date' },
+        { key: 'occupancy_pct', label: 'Occupancy', align: 'right',
+          render: r => r.occupancy_pct != null ? r.occupancy_pct.toFixed(1) + '%' : '—' },
+        { key: 'units_occupied', label: 'Occupied', align: 'right',
+          render: r => `${r.units_occupied ?? '—'} / ${r.units_total ?? '—'}` },
+        { key: 'mrr', label: 'MRR', align: 'right', render: r => r.mrr != null ? _money(r.mrr) : '' },
+        { key: 'move_ins', label: 'In', align: 'right' },
+        { key: 'move_outs', label: 'Out', align: 'right' },
+        { key: 'delinquent_30', label: '30d', align: 'right' },
+        { key: 'delinquent_60', label: '60d', align: 'right' },
+        { key: 'delinquent_90', label: '90d', align: 'right' },
+        { key: 'actions', label: '',
+          render: r => `<button class="btn-link danger" onclick="deleteSnapshot('${_esc(r.snapshot_date)}')">Delete</button>` },
+      ],
+      rows
+    );
+  } catch (e) { list.innerHTML = `<div class="error-msg">Failed: ${e.message}</div>`; }
+}
+
+async function saveSnapshot(ev) {
+  ev.preventDefault();
+  const payload = {
+    snapshot_date: document.getElementById('snap-date').value,
+    units_total: document.getElementById('snap-total').value,
+    units_occupied: document.getElementById('snap-occ').value,
+    mrr: document.getElementById('snap-mrr').value,
+    move_ins: document.getElementById('snap-mi').value,
+    move_outs: document.getElementById('snap-mo').value,
+    delinquent_30: document.getElementById('snap-d30').value,
+    delinquent_60: document.getElementById('snap-d60').value,
+    delinquent_90: document.getElementById('snap-d90').value,
+    notes: document.getElementById('snap-notes').value,
+  };
+  try {
+    const r = await fetch('/api/inputs/storage-snapshots', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const d = await r.json();
+    if (d.error) { _setStatus('snap-status', d.error, 'err'); return false; }
+    _setStatus('snap-status', `Saved snapshot for ${d.snapshot_date}.`, 'ok');
+    loadSnapshots();
+    loadInputsSummary();
+  } catch (e) { _setStatus('snap-status', e.message, 'err'); }
+  return false;
+}
+
+async function deleteSnapshot(snapDate) {
+  if (!confirm(`Delete snapshot for ${snapDate}?`)) return;
+  try {
+    const r = await fetch('/api/inputs/storage-snapshots/' + encodeURIComponent(snapDate), { method: 'DELETE' });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    loadSnapshots();
+    loadInputsSummary();
+  } catch (e) { alert(e.message); }
+}
+
+/* ── Turnaways ── */
+async function loadTurnaways() {
+  const list = document.getElementById('ta-list');
+  try {
+    const r = await fetch('/api/inputs/turnaways');
+    const d = await r.json();
+    if (d.error) { list.innerHTML = `<div class="error-msg">${d.error}</div>`; return; }
+    const rows = d.entries || [];
+    if (!rows.length) {
+      list.innerHTML = '<div class="question-sub" style="padding:8px 0">No turnaways logged.</div>';
+      return;
+    }
+    list.innerHTML = makeTable(
+      [
+        { key: 'entry_date', label: 'Date' },
+        { key: 'count', label: 'Count', align: 'right' },
+        { key: 'est_revenue_lost', label: 'Est. Lost', align: 'right',
+          render: r => r.est_revenue_lost ? _money(r.est_revenue_lost) : '—' },
+        { key: 'reason', label: 'Reason', render: r => _esc(r.reason || '') },
+        { key: 'notes', label: 'Notes', render: r => _esc(r.notes || '') },
+        { key: 'actions', label: '',
+          render: r => `<button class="btn-link danger" onclick="deleteTurnaway('${_esc(r.entry_date)}','${_esc(r.id)}')">Delete</button>` },
+      ],
+      rows
+    );
+  } catch (e) { list.innerHTML = `<div class="error-msg">Failed: ${e.message}</div>`; }
+}
+
+async function saveTurnaway(ev) {
+  ev.preventDefault();
+  const payload = {
+    entry_date: document.getElementById('ta-date').value,
+    count: document.getElementById('ta-count').value || 1,
+    est_revenue_lost: document.getElementById('ta-rev').value || 0,
+    reason: document.getElementById('ta-reason').value,
+    notes: document.getElementById('ta-notes').value,
+  };
+  try {
+    const r = await fetch('/api/inputs/turnaways', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const d = await r.json();
+    if (d.error) { _setStatus('ta-status', d.error, 'err'); return false; }
+    _setStatus('ta-status', `Logged.`, 'ok');
+    document.getElementById('ta-rev').value = '';
+    document.getElementById('ta-notes').value = '';
+    loadTurnaways();
+    loadInputsSummary();
+  } catch (e) { _setStatus('ta-status', e.message, 'err'); }
+  return false;
+}
+
+async function deleteTurnaway(entryDate, id) {
+  if (!confirm(`Delete this turnaway entry?`)) return;
+  try {
+    const url = `/api/inputs/turnaways?entry_date=${encodeURIComponent(entryDate)}&id=${encodeURIComponent(id)}`;
+    const r = await fetch(url, { method: 'DELETE' });
+    const d = await r.json();
+    if (d.error) { alert(d.error); return; }
+    loadTurnaways();
+    loadInputsSummary();
+  } catch (e) { alert(e.message); }
 }
 
 // Load the first tab on page load (only if already authenticated)
