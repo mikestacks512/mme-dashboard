@@ -594,6 +594,171 @@ def get_sales():
     }
 
 
+# ── Report: Dispatch & Operations (Page 2) ──
+
+def get_dispatch():
+    """Dispatch & Operations metrics from SmartMoving opportunities.
+
+    Page 2 of MME_Unified_Dashboard_Spec.md. The spec calls for crew/truck
+    real-time status, on-time arrival, overtime, etc. — which need richer
+    SmartMoving job data than the schema currently captures. This report
+    delivers what is computable now: today's schedule, this-week schedule,
+    booking lead time, recent volume, and capacity flags.
+    """
+    con = _get_duckdb()
+    if not con:
+        return {"error": "DuckDB not found."}
+
+    opp_count = con.execute("SELECT COUNT(*) FROM opportunities").fetchone()[0]
+    if opp_count == 0:
+        con.close()
+        return {"error": "No opportunities in DuckDB."}
+
+    today = datetime.now().date()
+    today_yyyymmdd = int(today.strftime("%Y%m%d"))
+    week_end = int((today + timedelta(days=6)).strftime("%Y%m%d"))
+    next_week_end = int((today + timedelta(days=13)).strftime("%Y%m%d"))
+    last_30 = int((today - timedelta(days=30)).strftime("%Y%m%d"))
+
+    # Booked-status filter mirrors the rest of the codebase
+    BOOKED = "status IN (3,5,10,11)"
+
+    today_row = con.execute(
+        f"""
+        SELECT COUNT(*) AS jobs, COALESCE(SUM(estimated_total), 0) AS rev
+        FROM opportunities
+        WHERE service_date = ? AND {BOOKED}
+        """,
+        [today_yyyymmdd],
+    ).fetchone()
+
+    week_row = con.execute(
+        f"""
+        SELECT COUNT(*) AS jobs, COALESCE(SUM(estimated_total), 0) AS rev,
+               COALESCE(AVG(estimated_total), 0) AS avg_size
+        FROM opportunities
+        WHERE service_date BETWEEN ? AND ? AND {BOOKED}
+        """,
+        [today_yyyymmdd, week_end],
+    ).fetchone()
+
+    next_week_row = con.execute(
+        f"""
+        SELECT COUNT(*) AS jobs, COALESCE(SUM(estimated_total), 0) AS rev
+        FROM opportunities
+        WHERE service_date BETWEEN ? AND ? AND {BOOKED}
+        """,
+        [int((today + timedelta(days=7)).strftime("%Y%m%d")), next_week_end],
+    ).fetchone()
+
+    completed_30 = con.execute(
+        f"""
+        SELECT COUNT(*), COALESCE(SUM(estimated_total), 0)
+        FROM opportunities
+        WHERE service_date BETWEEN ? AND ? AND status IN (10, 11)
+        """,
+        [last_30, today_yyyymmdd],
+    ).fetchone()
+
+    cancelled_30 = con.execute(
+        """
+        SELECT COUNT(*) FROM opportunities
+        WHERE service_date BETWEEN ? AND ? AND status = 30
+        """,
+        [last_30, today_yyyymmdd],
+    ).fetchone()
+
+    # Booking lead time — days between created_at_utc and service_date
+    lead_row = con.execute(
+        f"""
+        SELECT
+            AVG(DATEDIFF('day', created_at_utc::DATE,
+                CAST(SUBSTR(CAST(service_date AS VARCHAR),1,4) || '-' ||
+                     SUBSTR(CAST(service_date AS VARCHAR),5,2) || '-' ||
+                     SUBSTR(CAST(service_date AS VARCHAR),7,2) AS DATE))) AS avg_days
+        FROM opportunities
+        WHERE created_at_utc IS NOT NULL
+          AND service_date > 19000101
+          AND service_date >= ?
+          AND {BOOKED}
+        """,
+        [int((today - timedelta(days=90)).strftime("%Y%m%d"))],
+    ).fetchone()
+    avg_lead_time = round(lead_row[0], 1) if lead_row and lead_row[0] else None
+
+    # Daily schedule — next 14 days
+    schedule_rows = con.execute(
+        f"""
+        SELECT service_date, COUNT(*) AS jobs, COALESCE(SUM(estimated_total), 0) AS rev
+        FROM opportunities
+        WHERE service_date BETWEEN ? AND ? AND {BOOKED}
+        GROUP BY service_date
+        ORDER BY service_date
+        """,
+        [today_yyyymmdd, next_week_end],
+    ).fetchall()
+
+    schedule = []
+    for d, jobs, rev in schedule_rows:
+        ds = str(d)
+        if len(ds) != 8:
+            continue
+        iso_date = f"{ds[:4]}-{ds[4:6]}-{ds[6:8]}"
+        try:
+            dt = datetime.strptime(iso_date, "%Y-%m-%d").date()
+            day_name = dt.strftime("%a %b %d")
+        except Exception:
+            day_name = iso_date
+        schedule.append({
+            "date": iso_date,
+            "label": day_name,
+            "jobs": int(jobs),
+            "revenue": round(float(rev or 0), 2),
+        })
+
+    # Pending estimates (status 1, 2 — outstanding pipeline)
+    outstanding_row = con.execute(
+        """
+        SELECT COUNT(*), COALESCE(SUM(estimated_total), 0)
+        FROM opportunities
+        WHERE status IN (1, 2)
+        """
+    ).fetchone()
+
+    last_sync = _get_last_sync(con, "opportunities")
+    con.close()
+
+    return {
+        "generated": datetime.now().isoformat(),
+        "today_iso": today.isoformat(),
+        "last_sync": last_sync,
+        "today": {
+            "jobs": int(today_row[0] or 0),
+            "revenue": round(float(today_row[1] or 0), 2),
+        },
+        "this_week": {
+            "jobs": int(week_row[0] or 0),
+            "revenue": round(float(week_row[1] or 0), 2),
+            "avg_job_size": round(float(week_row[2] or 0), 2),
+        },
+        "next_week": {
+            "jobs": int(next_week_row[0] or 0),
+            "revenue": round(float(next_week_row[1] or 0), 2),
+        },
+        "completed_30d": {
+            "jobs": int(completed_30[0] or 0),
+            "revenue": round(float(completed_30[1] or 0), 2),
+        },
+        "cancellations_30d": int(cancelled_30[0] or 0),
+        "avg_lead_time_days": avg_lead_time,
+        "schedule": schedule,
+        "outstanding_estimates": {
+            "count": int(outstanding_row[0] or 0),
+            "estimated_value": round(float(outstanding_row[1] or 0), 2),
+        },
+    }
+
+
 # ── Report: Marketing (Page 7) ──
 
 def get_marketing():

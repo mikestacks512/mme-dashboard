@@ -26,7 +26,7 @@ from db.init_schema import init_schema
 from web.reports import (
     get_leads, get_financial, get_estimates, get_sales, get_marketing,
     get_trends, get_cfo, get_cancellations, get_pipeline, get_reviews,
-    get_claims, get_yoy, get_monthly_detail,
+    get_claims, get_yoy, get_monthly_detail, get_dispatch,
     DB_PATH, EXPORT_DIR,
 )
 from web import inputs as manual_inputs
@@ -435,6 +435,27 @@ def api_inputs_turnaways_delete(entry_date: str, id: str):
         return manual_inputs.delete_turnaway(entry_date, id)
     except Exception as e:
         return _input_error(e)
+
+
+@app.get("/api/dispatch")
+def api_dispatch():
+    return _safe(get_dispatch, "Dispatch")
+
+
+@app.get("/api/storage")
+def api_storage():
+    try:
+        return manual_inputs.get_storage_report()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/fleet")
+def api_fleet(days: int = 30):
+    try:
+        return manual_inputs.get_truck_report(days)
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.get("/api/callcenter")

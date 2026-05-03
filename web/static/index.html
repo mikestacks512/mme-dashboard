@@ -354,6 +354,12 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 .input-status { font-size: 12px; margin-top: 10px; min-height: 16px; }
 .input-status.ok { color: var(--green); }
 .input-status.err { color: var(--red); }
+
+/* ── Tab separator (visual grouping) ── */
+.tab-sep {
+  width: 1px; align-self: stretch; margin: 8px 6px;
+  background: var(--border);
+}
 </style>
 </head>
 <body>
@@ -376,25 +382,36 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 </div>
 
 <div class="tabs">
-  <div class="tab active" data-tab="overview">Overview</div>
-  <div class="tab" data-tab="cfo">Virtual CFO</div>
-  <div class="tab" data-tab="financial">Financial Deep Dive</div>
-  <div class="tab" data-tab="sales">Sales Reps</div>
-  <div class="tab" data-tab="marketing">Marketing ROI</div>
-  <div class="tab" data-tab="estimates">Pricing & Estimates</div>
-  <div class="tab" data-tab="cancellations">Cancellations</div>
+  <div class="tab active" data-tab="overview">Today</div>
+  <div class="tab-sep"></div>
+  <div class="tab" data-tab="dispatch">Dispatch</div>
+  <div class="tab" data-tab="fleet">Fleet</div>
+  <div class="tab" data-tab="storage">Storage</div>
+  <div class="tab-sep"></div>
+  <div class="tab" data-tab="cfo">CFO</div>
+  <div class="tab" data-tab="financial">Financials</div>
+  <div class="tab-sep"></div>
+  <div class="tab" data-tab="sales">Sales</div>
+  <div class="tab" data-tab="estimates">Estimates</div>
   <div class="tab" data-tab="pipeline">Pipeline</div>
+  <div class="tab" data-tab="cancellations">Cancellations</div>
+  <div class="tab-sep"></div>
+  <div class="tab" data-tab="marketing">Marketing</div>
   <div class="tab" data-tab="callcenter">Call Center</div>
+  <div class="tab-sep"></div>
   <div class="tab" data-tab="reviews">Reviews</div>
   <div class="tab" data-tab="claims">Claims</div>
-  <div class="tab" data-tab="yoy">Year vs Year</div>
+  <div class="tab-sep"></div>
   <div class="tab" data-tab="trends">Trends</div>
+  <div class="tab" data-tab="yoy">Year vs Year</div>
+  <div class="tab-sep"></div>
   <div class="tab" data-tab="inputs">Inputs</div>
-  <div class="tab" data-tab="data">Data Mgmt</div>
+  <div class="tab" data-tab="data">Data</div>
 </div>
 
 <div class="content">
   <div class="panel active" id="panel-overview"><div class="loading">Loading overview...</div></div>
+  <div class="panel" id="panel-dispatch"><div class="loading">Loading dispatch...</div></div>
   <div class="panel" id="panel-cfo"><div class="loading">Analyzing your data...</div></div>
   <div class="panel" id="panel-financial"><div class="loading">Loading financial data...</div></div>
   <div class="panel" id="panel-sales"><div class="loading">Loading sales data...</div></div>
@@ -405,6 +422,8 @@ tr:hover td { background: rgba(255,255,255,0.02); }
   <div class="panel" id="panel-callcenter"><div class="loading">Loading call center data...</div></div>
   <div class="panel" id="panel-reviews"><div class="loading">Loading reviews...</div></div>
   <div class="panel" id="panel-claims"><div class="loading">Loading claims...</div></div>
+  <div class="panel" id="panel-storage"><div class="loading">Loading storage data...</div></div>
+  <div class="panel" id="panel-fleet"><div class="loading">Loading fleet data...</div></div>
   <div class="panel" id="panel-yoy"><div class="loading">Loading year-over-year...</div></div>
   <div class="panel" id="panel-trends"><div class="loading">Loading trends...</div></div>
   <div class="panel" id="panel-inputs"></div>
@@ -1440,14 +1459,332 @@ const renderers = {
   },
 
 
+  /* ── STORAGE OPERATIONS (Page 9 of spec) ── */
+  storage(panel, d) {
+    const r = d.roster || {};
+    const l = d.latest;
+    const trend = d.trend || [];
+    const flow = d.flow_30d || {};
+    const sizes = d.size_classes || [];
+
+    let html = stampLine([
+      l ? `Latest snapshot: ${fmtDate(l.snapshot_date)}` : 'No snapshots logged yet',
+      r.active_units ? `${r.active_units} active units in roster` : 'No units in roster',
+    ]);
+
+    if (!l && !r.active_units) {
+      html += `<div class="insight"><div class="insight-label">Get Started</div>
+        Storage operations metrics need data. Go to the <strong>Inputs</strong> tab to add storage units to your roster and log occupancy snapshots. Once you have a few weeks of snapshots logged, this page will show occupancy trends, MRR, delinquency aging, and revenue per cubic foot.</div>`;
+      panel.innerHTML = html;
+      return;
+    }
+
+    // ── KPI scorecards ──
+    html += `<div class="scorecards">`;
+    html += sc('Physical Occupancy',
+      l && l.occupancy_pct != null ? l.occupancy_pct + '%' : '—',
+      l ? `${l.units_occupied} of ${l.units_total} units occupied. Spec target: ≥ 85%.` : 'Log a snapshot to see occupancy.',
+      l ? l.occupancy_status : 'MISS');
+    html += sc('Economic Occupancy',
+      l && l.economic_occupancy_pct != null ? l.economic_occupancy_pct + '%' : '—',
+      r.potential_mrr ? `Actual MRR vs. potential at street rate (${fmtK(r.potential_mrr)}).` : 'Set monthly rates on units to compute.',
+      l && l.economic_occupancy_pct != null
+        ? (l.economic_occupancy_pct >= 85 ? 'OK' : l.economic_occupancy_pct >= 70 ? 'WARN' : 'MISS')
+        : '');
+    html += sc('MRR',
+      l ? fmtK(l.mrr) : '—',
+      l && r.potential_mrr ? `${Math.round(l.mrr / r.potential_mrr * 100)}% of potential.` : 'Monthly recurring revenue from occupied units.',
+      '');
+    html += sc('Avg Rate / Unit',
+      l && l.avg_rate_per_occupied != null ? '$' + Math.round(l.avg_rate_per_occupied) : '—',
+      l ? 'MRR divided by occupied units.' : '',
+      '');
+    html += sc('Revenue / cuft',
+      l && l.revenue_per_cuft != null ? '$' + l.revenue_per_cuft.toFixed(2) : '—',
+      r.active_cuft ? `Across ${Math.round(r.active_cuft).toLocaleString()} active cuft.` : 'Set cubic_feet on units to compute.',
+      '');
+    html += sc('Net Move-Ins (30d)',
+      flow.net != null ? (flow.net >= 0 ? '+' : '') + flow.net : '—',
+      `${flow.move_ins || 0} in / ${flow.move_outs || 0} out. Spec alert: negative for 2+ weeks.`,
+      flow.net == null ? '' : flow.net >= 0 ? 'OK' : 'WARN');
+    html += sc('Delinquent Units',
+      l ? l.delinquent_total : '—',
+      l && l.delinquent_pct != null ? `${l.delinquent_pct}% of occupied.` : 'No data.',
+      l ? (l.delinquent_total === 0 ? 'OK' : l.delinquent_total <= 2 ? 'WARN' : 'MISS') : '');
+    html += sc('Active Units',
+      r.active_units || 0,
+      r.total_units > r.active_units ? `${r.total_units - r.active_units} inactive in roster.` : 'All units in roster are active.',
+      '');
+    html += `</div>`;
+
+    // ── Occupancy + MRR trend ──
+    if (trend.length >= 2) {
+      html += `<div class="section"><div class="section-title">Occupancy Trend (last 90 days)</div>`;
+      html += makeBars(
+        trend.slice(-30),
+        'snapshot_date',
+        'occupancy_pct',
+        { color: 'blue', max: 100, fmt: v => v != null ? v.toFixed(1) + '%' : '—' }
+      );
+      html += `</div>`;
+
+      html += `<div class="section"><div class="section-title">MRR Trend</div>`;
+      html += makeBars(
+        trend.slice(-30),
+        'snapshot_date',
+        'mrr',
+        { color: 'green', fmt: fmtK }
+      );
+      html += `</div>`;
+    } else if (trend.length === 1) {
+      html += `<div class="insight"><div class="insight-label">Trend Coming Soon</div>
+        You have one snapshot logged. Once you have at least 2-3 snapshots, this page will show occupancy and MRR trends.</div>`;
+    }
+
+    // ── Delinquency aging ──
+    if (l && l.delinquent_total > 0) {
+      html += `<div class="section"><div class="section-title">Delinquency Aging</div>`;
+      html += makeTable(
+        [
+          { key: 'bucket', label: 'Aging' },
+          { key: 'count', label: 'Units', align: 'right' },
+        ],
+        [
+          { bucket: '30 days', count: l.delinquent_30 },
+          { bucket: '60 days', count: l.delinquent_60 },
+          { bucket: '90+ days (lien pipeline)', count: l.delinquent_90 },
+        ]
+      );
+      if (l.delinquent_90 > 0) {
+        html += `<div class="insight" style="margin-top:12px"><div class="insight-label">Lien Pipeline</div>
+          ${l.delinquent_90} unit${l.delinquent_90 === 1 ? '' : 's'} 90+ days delinquent. Spec alert fires at 60-day delinquency — these are past that threshold.</div>`;
+      }
+      html += `</div>`;
+    }
+
+    // ── Roster by size class ──
+    if (sizes.length) {
+      html += `<div class="section"><div class="section-title">Active Roster by Size Class</div>`;
+      html += makeTable(
+        [
+          { key: 'size', label: 'Size Class' },
+          { key: 'count', label: 'Units', align: 'right' },
+          { key: 'cubic_feet', label: 'Cuft', align: 'right',
+            render: r => r.cubic_feet ? Math.round(r.cubic_feet).toLocaleString() : '—' },
+          { key: 'potential_mrr', label: 'Potential MRR', align: 'right',
+            render: r => r.potential_mrr ? fmtK(r.potential_mrr) : '—' },
+        ],
+        sizes
+      );
+      html += `</div>`;
+    }
+
+    // ── Snapshot history ──
+    if (trend.length) {
+      html += `<div class="section"><div class="section-title">Snapshot History</div>`;
+      html += makeTable(
+        [
+          { key: 'snapshot_date', label: 'Date' },
+          { key: 'occupancy_pct', label: 'Occ %', align: 'right',
+            render: r => r.occupancy_pct != null ? r.occupancy_pct.toFixed(1) + '%' : '—' },
+          { key: 'units', label: 'Occupied', align: 'right',
+            render: r => `${r.units_occupied} / ${r.units_total}` },
+          { key: 'mrr', label: 'MRR', align: 'right', render: r => fmtK(r.mrr) },
+          { key: 'move_ins', label: 'In', align: 'right' },
+          { key: 'move_outs', label: 'Out', align: 'right' },
+          { key: 'delinquent_30', label: '30d', align: 'right' },
+          { key: 'delinquent_60', label: '60d', align: 'right' },
+          { key: 'delinquent_90', label: '90d', align: 'right' },
+        ],
+        trend.slice().reverse()
+      );
+      html += `</div>`;
+    }
+
+    panel.innerHTML = html;
+  },
+
+
+  /* ── DISPATCH & OPERATIONS (Page 2 of spec) ── */
+  dispatch(panel, d) {
+    const today = d.today || {};
+    const week = d.this_week || {};
+    const next_week = d.next_week || {};
+    const completed = d.completed_30d || {};
+    const outstanding = d.outstanding_estimates || {};
+    const sched = d.schedule || [];
+
+    let html = stampLine([
+      d.today_iso ? `Today: ${fmtDate(d.today_iso)}` : null,
+      d.last_sync ? `Synced ${syncAge(d.last_sync)}` : null,
+    ]);
+
+    // ── KPI scorecards ──
+    html += `<div class="scorecards">`;
+    html += sc('Jobs Today', today.jobs || 0,
+      `Booked revenue: ${fmtK(today.revenue)}.`,
+      today.jobs > 0 ? 'OK' : '');
+    html += sc('Jobs This Week', week.jobs || 0,
+      `${fmtK(week.revenue)} booked, avg job ${fmtK(week.avg_job_size)}.`,
+      '');
+    html += sc('Next Week', next_week.jobs || 0,
+      `${fmtK(next_week.revenue)} booked. Lead time matters here.`,
+      '');
+    html += sc('Avg Booking Lead Time',
+      d.avg_lead_time_days != null ? d.avg_lead_time_days + ' days' : '—',
+      'Days between estimate and service date over last 90 days. Short = demand outpacing capacity.',
+      '');
+    html += sc('Completed (30d)', completed.jobs || 0,
+      `${fmtK(completed.revenue)} delivered revenue.`,
+      '');
+    html += sc('Cancellations (30d)', d.cancellations_30d || 0,
+      'Watch this — high values eat capacity.',
+      d.cancellations_30d == null ? '' :
+        d.cancellations_30d <= 3 ? 'OK' :
+        d.cancellations_30d <= 8 ? 'WARN' : 'MISS');
+    html += sc('Outstanding Estimates', outstanding.count || 0,
+      `${fmtK(outstanding.estimated_value)} in pending pipeline. Follow up.`,
+      '');
+    html += `</div>`;
+
+    // ── 14-day schedule ──
+    if (sched.length) {
+      html += `<div class="section"><div class="section-title">Schedule — Next 14 Days</div>`;
+      html += makeBars(
+        sched,
+        'label',
+        'jobs',
+        { color: 'blue', fmt: v => v + ' job' + (v === 1 ? '' : 's') }
+      );
+      html += `</div>`;
+
+      html += `<div class="section"><div class="section-title">Booked Revenue — Next 14 Days</div>`;
+      html += makeBars(
+        sched,
+        'label',
+        'revenue',
+        { color: 'green', fmt: fmtK }
+      );
+      html += `</div>`;
+
+      html += `<div class="section"><div class="section-title">Daily Detail</div>`;
+      html += makeTable(
+        [
+          { key: 'label', label: 'Day' },
+          { key: 'jobs', label: 'Jobs', align: 'right' },
+          { key: 'revenue', label: 'Revenue', align: 'right', render: r => fmtK(r.revenue) },
+        ],
+        sched
+      );
+      html += `</div>`;
+    } else {
+      html += `<div class="insight"><div class="insight-label">Light Schedule</div>
+        No booked jobs in the next 14 days. Either we're between waves of demand, or the SmartMoving sync needs a refresh.</div>`;
+    }
+
+    html += `<div class="insight"><div class="insight-label">About These Metrics</div>
+      Derived from SmartMoving opportunities by service date. Real-time crew status, on-time arrival rate, and overtime tracking from the spec require richer SmartMoving job timestamps than the current schema captures — coming in a future iteration.</div>`;
+
+    panel.innerHTML = html;
+  },
+
+
+  /* ── FLEET PRODUCTIVITY (Page 6 of spec — truck portion) ── */
+  fleet(panel, d) {
+    const f = d.fleet || {};
+    const trucks = d.trucks || [];
+    const trend = d.daily_trend || [];
+    const days = d.window_days || 30;
+
+    let html = stampLine([
+      `Window: last ${days} days`,
+      `${f.active_trucks || 0} active trucks in roster`,
+      `${trend.length} day${trend.length === 1 ? '' : 's'} with utilization logged`,
+    ]);
+
+    if (!f.active_trucks) {
+      html += `<div class="insight"><div class="insight-label">Get Started</div>
+        Fleet metrics need data. Go to the <strong>Inputs</strong> tab to add trucks to the roster, then log daily utilization. Once you have a few weeks of utilization entries, this page will show fleet utilization %, jobs per truck, hours per truck, and per-truck breakdowns.</div>`;
+      panel.innerHTML = html;
+      return;
+    }
+
+    // ── KPI scorecards ──
+    html += `<div class="scorecards">`;
+    html += sc('Fleet Utilization',
+      f.fleet_util_pct != null ? f.fleet_util_pct + '%' : '—',
+      `${f.in_service_days_logged} of ${f.denominator_truck_days} truck-days in service.`,
+      f.fleet_util_pct == null ? '' :
+        f.fleet_util_pct >= 70 ? 'OK' : f.fleet_util_pct >= 50 ? 'WARN' : 'MISS');
+    html += sc('Total Jobs', (f.fleet_jobs || 0).toLocaleString(),
+      `Logged across the fleet in last ${days} days.`, '');
+    html += sc('Total Hours', (f.fleet_hours || 0).toLocaleString(),
+      `Active hours across all trucks.`, '');
+    html += sc('Active Trucks', f.active_trucks,
+      f.total_trucks > f.active_trucks
+        ? `${f.total_trucks - f.active_trucks} inactive in roster.`
+        : 'All trucks in roster are active.', '');
+    html += sc('Avg Jobs / Truck',
+      f.active_trucks ? (f.fleet_jobs / f.active_trucks).toFixed(1) : '—',
+      `Per active truck over the window.`, '');
+    html += sc('Avg Hours / Truck',
+      f.active_trucks ? (f.fleet_hours / f.active_trucks).toFixed(1) : '—',
+      `Per active truck over the window.`, '');
+    html += `</div>`;
+
+    // ── Daily fleet-in-service trend ──
+    if (trend.length >= 2) {
+      html += `<div class="section"><div class="section-title">Daily Fleet In-Service %</div>`;
+      html += makeBars(
+        trend.slice(-30),
+        'entry_date',
+        'fleet_pct',
+        { color: 'blue', max: 100, fmt: v => v != null ? v.toFixed(0) + '%' : '—' }
+      );
+      html += `</div>`;
+    } else if (trend.length === 1) {
+      html += `<div class="insight"><div class="insight-label">Trend Coming Soon</div>
+        You have utilization logged for one day. Once you have at least 5–7 days, this page will show the daily fleet-in-service trend.</div>`;
+    }
+
+    // ── Per-truck breakdown ──
+    html += `<div class="section"><div class="section-title">Per-Truck Productivity (last ${days} days)</div>`;
+    html += makeTable(
+      [
+        { key: 'name', label: 'Truck' },
+        { key: 'truck_type', label: 'Type', render: r => r.truck_type || '—' },
+        { key: 'active', label: 'Status',
+          render: r => r.active ? '<span class="badge badge-ok">Active</span>' : '<span class="badge badge-miss">Inactive</span>' },
+        { key: 'days_in_service', label: 'Days In Svc', align: 'right',
+          render: r => `${r.days_in_service} / ${days}` },
+        { key: 'util_pct', label: 'Util %', align: 'right',
+          render: r => r.util_pct != null ? r.util_pct.toFixed(1) + '%' : '—' },
+        { key: 'jobs_total', label: 'Jobs', align: 'right' },
+        { key: 'hours_total', label: 'Hours', align: 'right',
+          render: r => Number(r.hours_total).toFixed(1) },
+        { key: 'avg_jobs_per_day', label: 'Jobs / Day', align: 'right',
+          render: r => r.avg_jobs_per_day != null ? r.avg_jobs_per_day.toFixed(2) : '—' },
+        { key: 'avg_hours_per_day', label: 'Hrs / Day', align: 'right',
+          render: r => r.avg_hours_per_day != null ? r.avg_hours_per_day.toFixed(2) : '—' },
+      ],
+      trucks
+    );
+    html += `</div>`;
+
+    // ── Footnote about scope ──
+    html += `<div class="insight"><div class="insight-label">About These Metrics</div>
+      Computed from the manual utilization log on the <strong>Inputs</strong> tab. Revenue per truck and profit per truck require attributing SmartMoving job revenue to specific trucks, which isn't yet wired up — coming in a future iteration.</div>`;
+
+    panel.innerHTML = html;
+  },
+
+
   /* ── INPUTS (manual data entry) ── */
   inputs(panel) {
     const today = new Date().toISOString().slice(0, 10);
     panel.innerHTML = `
       <div class="question">Manual Inputs</div>
-      <div class="question-sub">Data with no API source — fleet roster, daily truck utilization, storage units &amp; occupancy snapshots, and jobs turned away.</div>
-
-      <div id="inputs-summary" class="scorecards"><div class="loading" style="padding:20px">Loading summary...</div></div>
+      <div class="question-sub">Data with no API source. Enter it here and it powers the <strong>Fleet</strong>, <strong>Storage</strong>, and <strong>Dispatch</strong> tabs.</div>
 
       <!-- Fleet Roster -->
       <div class="input-section">
@@ -1576,7 +1913,6 @@ const renderers = {
     `;
 
     // Initial loads
-    loadInputsSummary();
     loadTrucks();
     loadUtilization();
     loadUnits();
@@ -1802,38 +2138,7 @@ function _setStatus(elId, msg, kind) {
   el.textContent = msg || '';
 }
 
-async function loadInputsSummary() {
-  const box = document.getElementById('inputs-summary');
-  if (!box) return;
-  try {
-    const r = await fetch('/api/inputs/summary');
-    const d = await r.json();
-    if (d.error) { box.innerHTML = `<div class="error-msg">${d.error}</div>`; return; }
-    let cards = '';
-    cards += sc('Active Trucks', _num(d.truck_count), 'In your fleet roster.', '');
-    cards += sc('Active Storage Units', _num(d.storage_unit_count), 'Available to rent.', '');
-    if (d.latest_snapshot) {
-      const ls = d.latest_snapshot;
-      cards += sc('Latest Occupancy',
-        ls.occupancy_pct != null ? ls.occupancy_pct + '%' : '—',
-        `As of ${ls.snapshot_date} · ${ls.units_occupied || 0} of ${ls.units_total || 0} units · MRR ${_money(ls.mrr)}`,
-        ls.occupancy_pct == null ? '' : (ls.occupancy_pct >= 85 ? 'OK' : ls.occupancy_pct >= 70 ? 'WARN' : 'MISS'));
-    } else {
-      cards += sc('Latest Occupancy', '—', 'No snapshots logged yet.', 'MISS');
-    }
-    cards += sc('Util Logged (7d)',
-      _num(d.util_last_7?.days_logged || 0) + ' days',
-      d.util_last_7?.days_logged ? `Avg ${d.util_last_7.avg_in_service_pct}% trucks in service.` : 'Log daily utilization to track this.',
-      (d.util_last_7?.days_logged || 0) >= 5 ? 'OK' : 'WARN');
-    cards += sc('Turnaways (30d)',
-      _num(d.turnaways_last_30?.count || 0),
-      d.turnaways_last_30?.count ? `Est. ${_money(d.turnaways_last_30.est_revenue_lost)} revenue lost.` : 'No turnaways logged.',
-      '');
-    box.innerHTML = cards;
-  } catch (e) {
-    box.innerHTML = `<div class="error-msg">Summary failed: ${e.message}</div>`;
-  }
-}
+async function loadInputsSummary() { /* Summary moved to Fleet/Storage/Dispatch tabs */ }
 
 /* ── Trucks ── */
 async function loadTrucks() {
